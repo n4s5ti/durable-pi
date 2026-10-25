@@ -42,6 +42,10 @@ if (host !== "127.0.0.1" && host !== "localhost") {
     for (const a of addresses ?? [])
       if (a.family === "IPv4") allowedHosts.add(`${a.address}:${port}`);
 }
+// Extra Host headers to accept, e.g. a `tailscale serve` name in front of a loopback hub:
+// DPI_HUB_ALLOWED_HOSTS=my-host.my-tailnet.ts.net:4781
+for (const h of (process.env.DPI_HUB_ALLOWED_HOSTS ?? "").split(","))
+  if (h.trim()) allowedHosts.add(h.trim().toLowerCase());
 
 const err = (code: string, message: string) => ({ error: { code, message } });
 type Handler = (req: express.Request, res: express.Response) => unknown;
