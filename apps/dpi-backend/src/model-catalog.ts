@@ -178,3 +178,15 @@ export const curatedModels = [
   },
 ] as const;
 export const defaultModelId = "anthropic/claude-sonnet-5.5";
+
+// Direct Anthropic models (provider "anthropic"), offered when <DPI_HOME>/auth.json holds an
+// `anthropic` credential, e.g. a Claude Pro/Max subscription from `pi-ai login anthropic`.
+export const anthropicModels = [
+  { id: "claude-opus-5-5", name: "Claude Opus 5.5 (sub)", tier: "S+", icon: "anthropic.png" },
+  { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5 (sub)", tier: "S+", icon: "anthropic.png" },
+  { id: "claude-fable-5-1", name: "Claude Fable 5.1 (sub)", tier: "S+", icon: "anthropic.png" },
+  { id: "claude-opus-5", name: "Claude Opus 5 (sub)", tier: "S", icon: "anthropic.png" },
+  { id: "claude-sonnet-5", name: "Claude Sonnet 5 (sub)", tier: "A", icon: "anthropic.png" },
+  { id: "claude-haiku-4-5", name: "Claude Haiku 4.5 (sub)", tier: "B", icon: "anthropic.png" },
+] as const;
+export const anthropicDefaultModelId = "claude-sonnet-5-5";
