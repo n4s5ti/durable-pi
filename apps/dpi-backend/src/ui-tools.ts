@@ -41,6 +41,29 @@ Limits: depth ${UI_LIMITS.depth}, ${UI_LIMITS.nodes} components, ${UI_LIMITS.tex
 
 const idParam = Type.String({ description: "View id: lowercase letters, digits, . _ -, up to 64" });
 
+/**
+ * An object, so models send one, or that object as JSON text, which some models send anyway (Sonnet
+ * 5.5 did). Fields beyond `type` are checked by checkUiSpec either way.
+ */
+const specParam = (description: string) =>
+  Type.Union(
+    [
+      Type.Object({ type: Type.String({ description: "Component type from the catalog" }) }, { additionalProperties: true }),
+      Type.String({ description: "The same component as JSON text" }),
+    ],
+    { description },
+  );
+
+/** Models sometimes send an object parameter as JSON text; accept that, then check it like any spec. */
+const specOf = (spec: unknown) => {
+  if (typeof spec !== "string") return spec;
+  try {
+    return JSON.parse(spec) as unknown;
+  } catch {
+    throw Error("spec must be a component object (or its JSON)");
+  }
+};
+
 const checkId = (id: string, what = "view id") => {
   if (!UI_ID.test(id)) throw Error(`Bad ${what} "${id}": use lowercase letters, digits, . _ - (1-64 chars)`);
 };
@@ -75,14 +98,14 @@ export function createUiTools(shared: SharedState) {
     parameters: Type.Object({
       id: idParam,
       title: Type.String({ description: "Shown above the view" }),
-      spec: Type.Unknown({ description: "The root component" }),
+      spec: specParam("The root component"),
     }),
     replay: "safe",
     execute: async (args, api, ctx) => {
       const { id, title, spec } = args as { id: string; title: string; spec: unknown };
       checkId(id);
       checkTitle(title);
-      return publish(api, ctx, { id, title, spec: checkUiSpec(spec), updatedAt: Date.now() });
+      return publish(api, ctx, { id, title, spec: checkUiSpec(specOf(spec)), updatedAt: Date.now() });
     },
   });
 
@@ -109,16 +132,17 @@ export function createUiTools(shared: SharedState) {
     parameters: Type.Object({
       name: Type.String({ description: "Template name: lowercase letters, digits, . _ -" }),
       description: Type.String({ description: "When to use it, in one sentence" }),
-      spec: Type.Unknown({ description: "The root component, with {{slot}} placeholders" }),
+      spec: specParam("The root component, with {{slot}} placeholders"),
     }),
     replay: "safe",
     execute: async (args) => {
       const { name, description, spec } = args as { name: string; description: string; spec: unknown };
       checkId(name, "template name");
       if (!description.trim() || description.length > 300) throw Error("description must be 1-300 characters");
-      checkUiSpec(spec, { template: true });
-      const slots = slotsOf(spec);
-      await shared.saveTemplate({ name, description, slots, spec, updatedAt: Date.now() });
+      const template = specOf(spec);
+      checkUiSpec(template, { template: true });
+      const slots = slotsOf(template);
+      await shared.saveTemplate({ name, description, slots, spec: template, updatedAt: Date.now() });
       return text(`Saved template "${name}"${slots.length ? ` with slots ${slots.join(", ")}` : " (no slots)"}.`);
     },
   });

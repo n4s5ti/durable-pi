@@ -41,8 +41,9 @@ test("ui-tools: render, replace, template save/list/use across sessions, clear, 
       "the view rides on the device tree",
     );
 
+    // Models sometimes send the object parameter as JSON text (Sonnet 5.5 did): same result.
     status.children[0].value = "413";
-    await a.call("ui_render", { id: "build", title: "Build status", spec: status });
+    await a.call("ui_render", { id: "build", title: "Build status", spec: JSON.stringify(status) });
     views = await a.views();
     assert.equal(views.length, 1, "same id replaces");
     assert.equal((views[0].spec as typeof status).children[0].value, "413");
@@ -57,6 +58,10 @@ test("ui-tools: render, replace, template save/list/use across sessions, clear, 
       /onClick: not a field of badge/,
     );
     assert.match(await a.call("ui_render", { id: "Bad Id", title: "X", spec: status }), /Bad view id/);
+    assert.match(
+      await a.call("ui_render", { id: "x", title: "X", spec: "{not json" }),
+      /spec must be a component object/,
+    );
     assert.equal((await a.views()).length, 1);
 
     // A template saved in one session is listed and used in another.
