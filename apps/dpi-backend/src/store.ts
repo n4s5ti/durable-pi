@@ -382,6 +382,13 @@ export class Store {
     };
   }
 
+  /** A device model by its id alone, for a job phase's subagent (`GET /v1/device` lists the ids). */
+  jobModel(id: string): ModelRef {
+    const m = this.modelList.find((x) => x.id === id);
+    if (!m) throw invalid(`Unknown model ${id}. Choose one of: ${this.modelList.map((x) => x.id).join(", ")}`);
+    return this.validateModel({ provider: m.provider, modelId: m.id });
+  }
+
   validateModel(model: unknown): ModelRef {
     const m = model as ModelRef | undefined;
     if (!m || typeof m.provider !== "string" || typeof m.modelId !== "string")
@@ -578,7 +585,7 @@ export class Store {
       );
       const registry = createRegistry();
       registry.install(CodingTools);
-      const jobs = createJobs({ shared: this.shared, sessionId: row.id });
+      const jobs = createJobs({ shared: this.shared, sessionId: row.id, resolveModel: (id) => this.jobModel(id) });
       const compaction = () => this.compactionOf(row.id);
       const playground = createPlayground(this.shared, row.id, this.spawnSession, jobs);
       registry.install(playground);
