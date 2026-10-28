@@ -29,14 +29,15 @@ Item {
     try {
       var next = Agui.readLine(root._pending, line)
       root._pending = next.pending
-      var event = next.event
-      if (!event) return
-      if (event.type === "STATE_SNAPSHOT") {
-        root.canvas = event.snapshot
-        root.live = true
-        root._backoff = 1000
-      } else if (event.type === "STATE_DELTA" && root.live) {
-        root.canvas = Agui.applyPatch(root.canvas, event.delta)
+      for (var i = 0; i < next.events.length; i++) {
+        var event = next.events[i]
+        if (event.type === "STATE_SNAPSHOT") {
+          root.canvas = event.snapshot
+          root.live = true
+          root._backoff = 1000
+        } else if (event.type === "STATE_DELTA" && root.live) {
+          root.canvas = Agui.applyPatch(root.canvas, event.delta)
+        }
       }
     } catch (error) {
       console.warn("[n4s5ti.durable-pi] AG-UI stream out of sync, reconnecting:", error)

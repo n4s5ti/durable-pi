@@ -49,24 +49,40 @@ function applyPatch(state, ops) {
 }
 
 /**
- * Feed one stdout line of the SSE body. `pending` holds the data lines of the event being read;
- * returns { pending, event } where event is the parsed AG-UI event once a blank line ends it.
+ * Feed one chunk from Quickshell's SplitParser. `pending` holds the data lines of the event being
+ * read; returns { pending, events } with every AG-UI event the chunk completed. SplitParser does not
+ * deliver SSE's blank separator lines as such: it folds them into the next chunk ("\ndata: …"), so a
+ * chunk may hold several lines, and an event is complete as soon as its data parses as JSON (the hub
+ * writes every event as one line). A blank line still ends a pending event, which must then parse.
  */
-function readLine(pending, line) {
-  line = String(line).replace(/\r$/, "");
-  if (line === "") {
-    if (!pending.length) return { pending: [], event: null };
-    var data = pending.join("\n");
-    if (data.length > MAX_EVENT) throw new Error("AG-UI event too large");
-    return { pending: [], event: JSON.parse(data) };
-  }
-  if (line.charAt(0) === ":") return { pending: pending, event: null };
-  if (line.indexOf("data:") === 0) {
+function readLine(pending, chunk) {
+  var events = [];
+  var lines = String(chunk).split("\n");
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].replace(/\r$/, "");
+    if (line === "") {
+      if (pending.length) events.push(parseData(pending));
+      pending = [];
+      continue;
+    }
+    if (line.charAt(0) === ":" || line.indexOf("data:") !== 0) continue;
     var next = pending.slice();
     next.push(line.slice(5).replace(/^ /, ""));
-    return { pending: next, event: null };
+    try {
+      events.push(parseData(next));
+      pending = [];
+    } catch (error) {
+      if (error.message === "AG-UI event too large") throw error;
+      pending = next;
+    }
   }
-  return { pending: pending, event: null };
+  return { pending: pending, events: events };
+}
+
+function parseData(lines) {
+  var data = lines.join("\n");
+  if (data.length > MAX_EVENT) throw new Error("AG-UI event too large");
+  return JSON.parse(data);
 }
 
 function values(record) {

@@ -16,10 +16,14 @@ import type { AgentSummary, NetworkDevice, SessionSummary } from "../../dpi-sdk/
 
 interface PluginAgui {
   applyPatch(state: unknown, ops: JsonPatchOp[]): CanvasState;
-  readLine(pending: string[], line: string): { pending: string[]; event: unknown };
+  readLine(pending: string[], chunk: string): { pending: string[]; events: unknown[] };
   toNetwork(state: CanvasState): {
     ok: boolean;
-    devices: { id: string; status: string; sessions: { name: string; busy: boolean; agents: number }[] }[];
+    devices: {
+      id: string;
+      status: string;
+      sessions: { name: string; busy: boolean; agents: number }[];
+    }[];
   };
   toGraph(state: CanvasState): {
     nodes: { id: string; type: string; busy: boolean }[];
@@ -32,8 +36,10 @@ const agui = (() => {
   const context = vm.createContext({});
   vm.runInContext(source.replace(/^\.pragma library\s*$/m, ""), context);
   // Round-trip through JSON so assertions compare plain objects, not another realm's.
-  const plain = <T>(fn: (...args: never[]) => T) => (...args: unknown[]) =>
-    JSON.parse(JSON.stringify((fn as (...a: unknown[]) => T)(...args)));
+  const plain =
+    <T>(fn: (...args: never[]) => T) =>
+    (...args: unknown[]) =>
+      JSON.parse(JSON.stringify((fn as (...a: unknown[]) => T)(...args)));
   const c = context as unknown as PluginAgui;
   return {
     applyPatch: plain(c.applyPatch),
@@ -77,14 +83,22 @@ const device = (id: string, sessions: SessionSummary[]) =>
 
 test("plugin Agui.js: SSE lines become events; comments and other fields are skipped", () => {
   let r = agui.readLine([], ": ping");
-  assert.deepEqual(r, { pending: [], event: null });
-  r = agui.readLine(r.pending, 'data: {"type":"STATE_DELTA",');
-  r = agui.readLine(r.pending, 'data: "delta":[]}\r');
-  r = agui.readLine(r.pending, "id: 7");
-  assert.equal(r.event, null);
-  r = agui.readLine(r.pending, "");
-  assert.deepEqual(r.event, { type: "STATE_DELTA", delta: [] });
+  assert.deepEqual(r, { pending: [], events: [] });
+  // A one-line event completes without the blank line SSE puts after it.
+  r = agui.readLine(r.pending, 'data: {"type":"RUN_STARTED","threadId":"t","runId":"r"}');
+  assert.deepEqual(r.events, [{ type: "RUN_STARTED", threadId: "t", runId: "r" }]);
+  // What Quickshell's SplitParser really delivers next: the blank line folded into the chunk.
+  r = agui.readLine(r.pending, '\ndata: {"type":"STATE_SNAPSHOT","snapshot":{}}');
+  assert.deepEqual(r.events, [{ type: "STATE_SNAPSHOT", snapshot: {} }]);
   assert.deepEqual(r.pending, []);
+  r = agui.readLine(r.pending, '\ndata: {"type":"STATE_DELTA",');
+  assert.deepEqual(r.events, []);
+  r = agui.readLine(r.pending, "id: 7");
+  assert.deepEqual(r.events, []);
+  r = agui.readLine(r.pending, 'data: "delta":[]}\r');
+  assert.deepEqual(r.events, [{ type: "STATE_DELTA", delta: [] }]);
+  assert.deepEqual(r.pending, []);
+  assert.deepEqual(agui.readLine([], ""), { pending: [], events: [] });
   assert.throws(() => agui.raw.readLine(["{not json"], ""));
 });
 
@@ -92,7 +106,11 @@ test("plugin Agui.js: applies every delta the hub can send, and throws on one th
   const steps: CanvasState[] = [
     emptyCanvas(),
     projectCanvas([device("box", [session("s/1", [agent(1)])])]),
-    projectCanvas([device("box", [session("s/1", [agent(1, { busy: true }), agent(2, { kind: "fork", parentId: 1 })])])]),
+    projectCanvas([
+      device("box", [
+        session("s/1", [agent(1, { busy: true }), agent(2, { kind: "fork", parentId: 1 })]),
+      ]),
+    ]),
     projectCanvas([device("a~b", [])]),
   ];
   for (let i = 1; i < steps.length; i++)
@@ -105,7 +123,9 @@ test("plugin Agui.js: applies every delta the hub can send, and throws on one th
 
 test("plugin Agui.js: the bar's network view and the canvas graph come from the same state", () => {
   const state = projectCanvas([
-    device("box", [session("s1", [agent(1), agent(2, { kind: "fork", parentId: 1, background: 1 })])]),
+    device("box", [
+      session("s1", [agent(1), agent(2, { kind: "fork", parentId: 1, background: 1 })]),
+    ]),
   ]);
   const network = agui.toNetwork(state);
   assert.equal(network.ok, true);
