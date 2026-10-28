@@ -64,7 +64,54 @@ test("agui: the projection keeps shape and liveness, never locations", () => {
     ownerAgentId: null,
     busy: true,
     background: 0,
+    views: {},
   });
+});
+
+test("agui: agent views pass the catalog check again at the hub, or are dropped", () => {
+  const good = { type: "metric", label: "Tests", value: "412" };
+  const views = [
+    { id: "build", title: "Build", spec: good, updatedAt: 5 },
+    { id: "evil", title: "Evil", spec: { type: "html", text: "<script>" }, updatedAt: 6 },
+    { id: "Bad Id", title: "Bad", spec: good, updatedAt: 7 },
+    ...Array.from({ length: 10 }, (_, i) => ({
+      id: `v${i}`,
+      title: "V",
+      spec: good,
+      updatedAt: i,
+    })),
+  ];
+  const state = projectCanvas([
+    device("box", [session("s", [agent(1, { views } as Partial<AgentSummary>)])]),
+  ]);
+  const projected = state.devices.box.sessions.s.agents["1"].views;
+  assert.deepEqual(projected.build, {
+    id: "build",
+    title: "Build",
+    spec: good,
+    template: null,
+    updatedAt: 5,
+  });
+  assert.equal("evil" in projected, false, "a spec outside the catalog never reaches a renderer");
+  assert.equal("Bad Id" in projected, false);
+  assert.ok(Object.keys(projected).length <= 8, "at most UI_LIMITS.views per agent");
+  const changed = projectCanvas([
+    device("box", [
+      session("s", [
+        agent(1, {
+          views: [{ ...views[0], spec: { ...good, value: "413" } }],
+        } as Partial<AgentSummary>),
+      ]),
+    ]),
+  ]);
+  assert.ok(
+    diffState(state, changed).some(
+      (op) =>
+        op.op === "replace" &&
+        op.path === "/devices/box/sessions/s/agents/1/views/build/spec/value",
+    ),
+    "a changed metric is one narrow replace",
+  );
 });
 
 test("agui: the projection is bounded and says how much it left out", () => {

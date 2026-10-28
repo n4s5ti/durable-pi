@@ -6,6 +6,7 @@
 // fails the build if pi-durable's own types stop fitting them.
 
 import type { JobDef } from "./jobs.js";
+import type { UiView } from "./ui-spec.js";
 
 export const API_VERSION = 1 as const;
 
@@ -101,6 +102,8 @@ export interface AgentRef {
 export interface AgentStatus {
   busy: boolean;
   background: number;
+  /** Views the agent published with the ui-tools add-on; absent when it has none. */
+  views?: UiView[];
 }
 
 export type AgentSummary = AgentRef & AgentStatus;

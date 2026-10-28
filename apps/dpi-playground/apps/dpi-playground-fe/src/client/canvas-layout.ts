@@ -57,10 +57,16 @@ export interface CanvasLayout {
   height: number;
 }
 
-const agentDetail = (a: CanvasAgent) =>
-  [a.kind === "root" ? "agent" : a.kind, a.background ? `${a.background} in background` : ""]
+const agentDetail = (a: CanvasAgent) => {
+  const views = Object.keys(a.views ?? {}).length;
+  return [
+    a.kind === "root" ? "agent" : a.kind,
+    a.background ? `${a.background} in background` : "",
+    views ? `${views} view${views === 1 ? "" : "s"}` : "",
+  ]
     .filter(Boolean)
     .join(" · ");
+};
 
 export function layoutCanvas(state: CanvasState): CanvasLayout {
   const nodes: CanvasNode[] = [];

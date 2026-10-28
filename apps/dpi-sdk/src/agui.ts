@@ -3,8 +3,18 @@
 // STATE_DELTA (RFC 6902 JSON Patch) on every change. Views only render it; nothing flows back.
 // Every collection is an object keyed by id (never an array) so a delta names exactly what changed.
 import type { AgentKind, DeviceStatus, NetworkDevice } from "./api.js";
+import { checkUiSpec, UI_ID, UI_LIMITS, type UiNode, type UiView } from "./ui-spec.js";
 
 export const CANVAS_LIMITS = { devices: 32, sessions: 32, agents: 64, text: 120 } as const;
+
+/** An agent-made view (ui-tools add-on), re-checked against the catalog here: it crossed from a device. */
+export interface CanvasView {
+  id: string;
+  title: string;
+  spec: UiNode;
+  template: string | null;
+  updatedAt: number;
+}
 
 export interface CanvasAgent {
   id: number;
@@ -14,6 +24,7 @@ export interface CanvasAgent {
   ownerAgentId: number | null;
   busy: boolean;
   background: number;
+  views: Record<string, CanvasView>;
 }
 
 export interface CanvasSession {
@@ -97,12 +108,33 @@ export function projectCanvas(devices: NetworkDevice[]): CanvasState {
           ownerAgentId: a.ownerAgentId ?? null,
           busy: a.busy === true,
           background: Math.max(0, Number(a.background) || 0),
+          views: projectViews(a.views),
         };
       device.sessions[session.id] = session;
     }
     state.devices[device.id] = device;
   }
   return state;
+}
+
+/** Views that pass the catalog check, at most UI_LIMITS.views per agent; anything else is dropped. */
+function projectViews(views: UiView[] | undefined) {
+  const out: Record<string, CanvasView> = {};
+  for (const v of (Array.isArray(views) ? views : []).slice(0, UI_LIMITS.views)) {
+    try {
+      if (typeof v.id !== "string" || !UI_ID.test(v.id)) continue;
+      out[v.id] = {
+        id: v.id,
+        title: clip(v.title),
+        spec: checkUiSpec(v.spec),
+        template: typeof v.template === "string" ? clip(v.template) : null,
+        updatedAt: Number(v.updatedAt) || 0,
+      };
+    } catch {
+      // A view that fails the catalog check never reaches a renderer.
+    }
+  }
+  return out;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>

@@ -122,9 +122,18 @@ test("plugin Agui.js: applies every delta the hub can send, and throws on one th
 });
 
 test("plugin Agui.js: the bar's network view and the canvas graph come from the same state", () => {
+  const view = {
+    id: "build",
+    title: "Build",
+    spec: { type: "badge", text: "green" },
+    updatedAt: 1,
+  };
   const state = projectCanvas([
     device("box", [
-      session("s1", [agent(1), agent(2, { kind: "fork", parentId: 1, background: 1 })]),
+      session("s1", [
+        agent(1, { views: [view] }),
+        agent(2, { kind: "fork", parentId: 1, background: 1 }),
+      ]),
     ]),
   ]);
   const network = agui.toNetwork(state);
@@ -137,11 +146,29 @@ test("plugin Agui.js: the bar's network view and the canvas graph come from the 
       ["d:box", "device", false],
       ["s:box/s1", "session", false],
       ["a:box/s1/1", "agent", false],
+      ["v:box/s1/1/build", "view", false],
       ["a:box/s1/2", "agent", true],
     ],
   );
   assert.deepEqual(
     graph.edges.map((e) => e.id),
-    ["d:box>s:box/s1", "s:box/s1>a:box/s1/1", "a:box/s1/1>a:box/s1/2"],
+    [
+      "d:box>s:box/s1",
+      "s:box/s1>a:box/s1/1",
+      "a:box/s1/1>v:box/s1/1/build",
+      "a:box/s1/1>a:box/s1/2",
+    ],
+  );
+  assert.deepEqual(
+    graph.nodes.find((n) => n.type === "view"),
+    {
+      id: "v:box/s1/1/build",
+      type: "view",
+      label: "Build",
+      detail: "view",
+      online: true,
+      busy: false,
+      spec: { type: "badge", text: "green" },
+    },
   );
 });

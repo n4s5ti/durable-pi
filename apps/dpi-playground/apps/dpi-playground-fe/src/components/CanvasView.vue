@@ -1,10 +1,12 @@
 <script setup lang="ts">
-// The network as a live, read-only graph from the hub's AG-UI stream (/api/agui). Clicking a
-// session or agent only opens it here; nothing on this view writes to a device.
+// The network as a live, read-only graph from the hub's AG-UI stream (/api/agui), with the views
+// agents published (ui-tools add-on) under it. Clicking a session or agent only opens it here;
+// nothing on this view writes to a device.
 import { computed, onBeforeUnmount } from "vue";
 import { canvasLive, canvasLoaded, canvasState, useCanvasFeed } from "../client/agui";
 import { layoutCanvas, NODE_H, NODE_W, type CanvasNode } from "../client/canvas-layout";
 import { select, ui } from "../client/store";
+import UiRender from "./UiRender.vue";
 
 const release = useCanvasFeed();
 onBeforeUnmount(release);
@@ -22,6 +24,24 @@ const hidden = computed(() => {
   }
   return { devices: s.moreDevices, sessions, agents };
 });
+
+/** Every agent's published views, newest first, with who made them. */
+const views = computed(() =>
+  Object.values(canvasState.value.devices)
+    .flatMap((d) =>
+      Object.values(d.sessions).flatMap((s) =>
+        Object.values(s.agents).flatMap((a) =>
+          Object.values(a.views).map((v) => ({
+            ...v,
+            key: `${d.id}/${s.id}/${a.id}/${v.id}`,
+            owner: `${a.name} · ${s.name}`,
+            busy: a.busy,
+          })),
+        ),
+      ),
+    )
+    .sort((x, y) => y.updatedAt - x.updatedAt),
+);
 
 const curve = (fromKey: string, toKey: string) => {
   const a = byKey.value.get(fromKey);
@@ -109,6 +129,17 @@ function open(n: CanvasNode) {
         </g>
       </svg>
     </div>
+    <section v-if="views.length" class="canvas-views" aria-label="Agent views">
+      <article v-for="v in views" :key="v.key" class="canvas-view-card" :class="{ busy: v.busy }">
+        <header>
+          <strong>{{ v.title }}</strong>
+          <small
+            >{{ v.owner }}<template v-if="v.template"> · {{ v.template }}</template></small
+          >
+        </header>
+        <UiRender :node="v.spec" />
+      </article>
+    </section>
     <footer v-if="hidden.devices || hidden.sessions || hidden.agents" class="canvas-more">
       Not drawn: {{ hidden.devices }} devices, {{ hidden.sessions }} sessions,
       {{ hidden.agents }} agents (canvas limits).

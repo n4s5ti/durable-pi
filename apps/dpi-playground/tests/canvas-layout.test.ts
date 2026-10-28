@@ -11,6 +11,7 @@ const agent = (id: number, patch: Partial<CanvasAgent> = {}): CanvasAgent => ({
   ownerAgentId: null,
   busy: false,
   background: 0,
+  views: {},
   ...patch,
 });
 

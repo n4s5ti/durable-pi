@@ -49,8 +49,9 @@ Item {
     id: card
 
     Rectangle {
-      implicitWidth: Style.space(180)
-      implicitHeight: Style.space(48)
+      readonly property bool isView: modelData.type === "view"
+      implicitWidth: Style.space(isView ? 280 : 180)
+      implicitHeight: isView ? viewBody.implicitHeight + Style.space(16) : Style.space(48)
       radius: Style.cornerRadius
       color: canvas.selectedId === modelData.id ? Qt.rgba(1, 1, 1, 0.08) : Qt.rgba(0, 0, 0, 0.25)
       border.width: modelData.busy ? 2 : 1
@@ -59,6 +60,35 @@ Item {
         : Commons.Color.muted
 
       ColumnLayout {
+        id: viewBody
+        visible: parent.isView
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: Style.space(8)
+        spacing: Style.space(6)
+
+        Text {
+          Layout.fillWidth: true
+          textFormat: Text.PlainText
+          text: modelData.label
+          color: Commons.Color.foreground
+          font.family: Style.font.family
+          font.pixelSize: Style.font.body
+          font.bold: true
+          elide: Text.ElideRight
+        }
+
+        Loader {
+          Layout.fillWidth: true
+          active: parent.visible
+          source: "UiNode.qml"
+          onLoaded: item.node = modelData.spec
+        }
+      }
+
+      ColumnLayout {
+        visible: !parent.isView
         anchors.fill: parent
         anchors.margins: Style.space(8)
         spacing: Style.space(2)

@@ -62,6 +62,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { createPlayground, Workspace, type SpawnSession } from "./extensions.js";
 import { createJobs, JobRuns, JOB_DEFS, jobDef, resolveJobInput, type Jobs } from "./jobs.js";
 import { ADDON_INFO, createAddons, PROMPTS, PromptChecklist, type Addons } from "./addons.js";
+import { UiViews, viewsOf } from "./ui-tools.js";
 import { JOB_RUNS_DOC } from "../../dpi-sdk/src/jobs.js";
 
 /** The pi-durable version this backend pins, read from package.json so the reported version cannot drift from it. */
@@ -583,7 +584,7 @@ export class Store {
       const playground = createPlayground(this.shared, row.id, this.spawnSession, jobs);
       registry.install(playground);
       // Custom extensions are installed but not selected: an agent turns them on in its own selection.
-      const addons = createAddons({ offline: this.options.provider === "faux" });
+      const addons = createAddons({ offline: this.options.provider === "faux", shared: this.shared });
       for (const extension of addons.list) registry.install(extension);
       const harness = await Harness.open(
         await openNodeSqliteStorage(row.dbPath),
@@ -684,14 +685,18 @@ export class Store {
     const names = this.names(row.id);
     const records = await this.scanAll(h);
     const live = tasks ?? (await this.liveTasks(h));
-    return records.map((record) => {
-      const own = live.filter((t) => t.conversationId === (record.id as number));
-      return {
-        ...this.agentRef(record, names),
-        busy: own.some((t) => !t.background),
-        background: own.filter((t) => t.background).length,
-      };
-    });
+    return Promise.all(
+      records.map(async (record) => {
+        const own = live.filter((t) => t.conversationId === (record.id as number));
+        const views = viewsOf(await h.snapshot(UiViews, record.id, ctx));
+        return {
+          ...this.agentRef(record, names),
+          busy: own.some((t) => !t.background),
+          background: own.filter((t) => t.background).length,
+          ...(views.length ? { views } : {}),
+        };
+      }),
+    );
   }
 
   async liveTasks(h: Harness): Promise<TaskNode[]> {
