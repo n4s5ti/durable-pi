@@ -1,10 +1,10 @@
-// The tools ported from Oh My Pi: todo's rules as a pure function, then every tool through a live session.
+// The toolkit add-on: todo's rules as a pure function, then every tool through a live session.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { applyTodo, renderTodo, splitPaths, type TodoPhase } from "../src/omp-tools.js";
+import { applyTodo, renderTodo, splitPaths, type TodoPhase } from "../src/toolkit.js";
 import { faux, tempStore } from "./helpers.js";
 
 const has = (bin: string) => {
@@ -47,12 +47,12 @@ test("todo: append, drop, rm, and errors name the problem", () => {
   assert.equal(p[0].tasks.length, 2);
 });
 
-test("path lists split into paths and globs the way Oh My Pi reads them", () => {
+test("path lists split into paths and globs", () => {
   assert.deepEqual(splitPaths(undefined), { paths: [], globs: [] });
   assert.deepEqual(splitPaths("src; tests;!**/*.test.ts;*.md"), { paths: ["src", "tests"], globs: ["!**/*.test.ts", "*.md"] });
 });
 
-test("omp-tools: new agents get the tools, and each one runs in the session's folder", { skip: !has("rg") }, async () => {
+test("toolkit: new agents get the tools, and each one runs in the session's folder", { skip: !has("rg") }, async () => {
   const t = await tempStore();
   mkdirSync(join(t.work, "src"), { recursive: true });
   writeFileSync(join(t.work, "src", "a.ts"), "export function alpha() {\n  return 1; // TODO tidy\n}\n");
@@ -60,14 +60,14 @@ test("omp-tools: new agents get the tools, and each one runs in the session's fo
   writeFileSync(join(t.work, "notes.md"), "todo list\n");
   const store = await t.open();
   try {
-    const s = await store.create({ name: "Omp", cwd: t.work, model: faux });
+    const s = await store.create({ name: "Toolkit", cwd: t.work, model: faux });
     const { h, c } = await store.resolveAgent(s.id, "main");
     const names = (await store.agentDetail(store.row(s.id), c)).tools.map((x) => x.name);
     for (const name of ["think", "grep", "glob", "ast_grep", "todo"]) assert.ok(names.includes(name), `${name} offered`);
 
     let n = 0;
     const call = async (name: string, args: unknown) => {
-      const sub = await store.send(c, { content: `tool: ${name} ${JSON.stringify(args)}`, requestId: `omp-${n++}` });
+      const sub = await store.send(c, { content: `tool: ${name} ${JSON.stringify(args)}`, requestId: `tk-${n++}` });
       assert.equal((await store.settled(h, sub.id as number, 15000)).status, "done");
       const text = (await store.transcript(c, "markdown")).text ?? "";
       return text.slice(text.lastIndexOf("Tool finished:"));

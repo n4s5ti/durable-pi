@@ -1,15 +1,15 @@
-// Web search and page reading, adapted from Oh My Pi's web/search providers and fetch tool (MIT; see omp-tools.ts).
+// Web search and page reading (license notice in toolkit.ts).
 // Providers are tried in order and each needs its key in the backend's environment: BRAVE_API_KEY, TAVILY_API_KEY,
 // EXA_API_KEY, SEARXNG_URL (a SearXNG instance with JSON output). DuckDuckGo's HTML page needs none and comes last.
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-durable";
-import { clip, decodeEntities, htmlText, htmlToMarkdown, MAX_TEXT, text } from "./omp-common.js";
+import { clip, decodeEntities, htmlText, htmlToMarkdown, MAX_TEXT, text } from "./toolkit-common.js";
 
 export type SearchResult = { title: string; url: string; snippet?: string; date?: string };
 type Recency = "day" | "week" | "month" | "year";
 type Query = { query: string; limit: number; recency?: Recency };
 
-/** Oh My Pi's browser-headers.ts: DuckDuckGo and many sites answer a browser, not a script. */
+/** DuckDuckGo and many sites answer a browser, not a script. */
 const BROWSER_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
 const TIMEOUT_MS = 20_000;
@@ -22,7 +22,7 @@ async function getJson(url: string, init: RequestInit) {
 
 const DAYS: Record<Recency, number> = { day: 1, week: 7, month: 31, year: 366 };
 
-/** DuckDuckGo's HTML results page (Oh My Pi's parseHtmlResults and unwrapResultUrl). */
+/** Results from DuckDuckGo's HTML page, with its redirect links unwrapped. */
 export function parseDuckDuckGo(html: string): SearchResult[] {
   const results: SearchResult[] = [];
   const blockRe =

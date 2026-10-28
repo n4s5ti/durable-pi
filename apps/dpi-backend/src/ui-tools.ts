@@ -20,7 +20,7 @@ import {
   type UiView,
 } from "../../dpi-sdk/src/ui-spec.js";
 import type { SharedState } from "./shared-state.js";
-import { text } from "./omp-common.js";
+import { text } from "./toolkit-common.js";
 
 /** The agent's published views by id, each as checked JSON. A fork starts with its parent's views. */
 export const UiViews = defineDoc<{ views: Record<string, string> }>({

@@ -1,9 +1,9 @@
-// Read-only GitHub, adapted from Oh My Pi's github tool (MIT; see omp-tools.ts). Every op is one gh CLI call in the
-// session's folder, so `repo` defaults to that checkout and gh's own login applies. Oh My Pi's writing ops
-// (pr_create, pr_push, pr_checkout) are left out: they belong to bash, where read-only agents never get them.
+// Read-only GitHub (license notice in toolkit.ts). Every op is one gh CLI call in the
+// session's folder, so `repo` defaults to that checkout and gh's own login applies. Writing ops
+// (creating, pushing or checking out pull requests) are left out: they belong to bash, where read-only agents never get them.
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-durable";
-import { clip, run, text } from "./omp-common.js";
+import { clip, run, text } from "./toolkit-common.js";
 
 export const GITHUB_OPS = [
   "repo_view",

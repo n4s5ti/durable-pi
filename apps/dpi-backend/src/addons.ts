@@ -1,10 +1,10 @@
 // Custom harness extensions an agent can turn on and off. Each is a plain pi-durable extension in the registry; the
 // agent's stored selection (`configure({ extensions: { add | remove } })`) decides whether it runs, from the next
-// request on. New sessions start with omp-tools selected; the others are off until an agent turns them on.
+// request on. New sessions start with toolkit selected; the others are off until an agent turns them on.
 //
 //   system-prompts       a checklist of built-in system prompts, rendered as one section
 //   jev-damage-control   Jev judges every bash command before it runs and blocks destructive ones
-//   omp-tools            search, todo, documents, web and GitHub tools ported from Oh My Pi (omp-tools.ts)
+//   toolkit              search, todo, documents, web and GitHub tools (toolkit.ts)
 //   ui-tools             read-only views on the live canvas and device-wide UI templates (ui-tools.ts)
 //
 // A hook runs outside the commit line and can run again after a crash. A hook that asks a person or an outside API
@@ -14,8 +14,8 @@ import { join } from "node:path";
 import { defineDoc, defineExtension, hook, section, ToolTask, type Extension } from "@earendil-works/pi-durable";
 import type { HarnessExtensionInfo } from "../../dpi-sdk/src/api.js";
 import { askJev, type JevAnswer, type JevQuestion } from "./jev.js";
-import { OmpTools } from "./omp-tools.js";
 import type { SharedState } from "./shared-state.js";
+import { Toolkit } from "./toolkit.js";
 import { createUiTools } from "./ui-tools.js";
 
 const PROMPTS_DIR = join(import.meta.dirname, "../prompts");
@@ -103,10 +103,10 @@ export const ADDON_INFO: Omit<HarnessExtensionInfo, "enabled" | "prompts">[] = [
       "Before every bash call, Jev judges the command in about 300 ms and blocks irreversible or destructive ones. The decision is a durable memo, so a restart never re-asks. If Jev is down, commands run.",
   },
   {
-    name: "omp-tools",
-    title: "Oh My Pi tools",
+    name: "toolkit",
+    title: "Toolkit",
     description:
-      "Ported from Oh My Pi: grep, glob and ast_grep search; a todo list that survives restarts; think; read_sqlite, read_archive and read_document (PDF, Office, EPUB); web_search and fetch_url; read-only github. On for new sessions.",
+      "grep, glob and ast_grep search; a todo list that survives restarts; think; read_sqlite, read_archive and read_document (PDF, Office, EPUB); web_search and fetch_url; read-only github. On for new sessions.",
   },
   {
     name: "ui-tools",
@@ -159,10 +159,10 @@ export function createAddons(opts: { offline: boolean; shared: SharedState }) {
   const all: Record<string, Extension> = {
     "system-prompts": prompts,
     "jev-damage-control": jev,
-    "omp-tools": OmpTools,
+    toolkit: Toolkit,
     "ui-tools": uiTools,
   };
-  return { all, list: [prompts, jev, OmpTools, uiTools] };
+  return { all, list: [prompts, jev, Toolkit, uiTools] };
 }
 
 export type Addons = ReturnType<typeof createAddons>;
