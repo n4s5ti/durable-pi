@@ -39,7 +39,9 @@ import { randomUUID } from "node:crypto";
 import { BACKGROUND_CONTEXT as ctx, withAbortSignal } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
-import { curatedModels, defaultModelId } from "./model-catalog.js";
+import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { anthropicDefaultModelId, anthropicModels, curatedModels, defaultModelId } from "./model-catalog.js";
+import { FileCredentialStore } from "./credentials.js";
 import { fauxModels, installFaux } from "./faux.js";
 import {
   Harness,
@@ -62,7 +64,9 @@ import { createJobs, JobRuns, JOB_DEFS, jobDef, resolveJobInput, type Jobs } fro
 import { ADDON_INFO, createAddons, PROMPTS, PromptChecklist, type Addons } from "./addons.js";
 import { JOB_RUNS_DOC } from "../../dpi-sdk/src/jobs.js";
 
-export const DURABLE_VERSION = "1.0.3";
+/** The pi-durable version this backend pins, read from package.json so the reported version cannot drift from it. */
+export const DURABLE_VERSION: string = JSON.parse(readFileSync(join(import.meta.dirname, "../package.json"), "utf8"))
+  .dependencies["@earendil-works/pi-durable"];
 
 /** Tools that create, update or delete: shell, files, App State, job runs, sessions, pages and subagents. */
 export const WRITE_TOOLS = new Set([
@@ -91,6 +95,8 @@ export interface StoreOptions {
   startDirs: string[];
   name: string;
   provider: "openrouter" | "faux";
+  /** pi-ai credential file (auth.json); an `anthropic` entry adds the direct Anthropic models. */
+  authFile?: string;
 }
 
 /** Agent documents a client may read or stream, by kind. */
@@ -153,7 +159,9 @@ const decodeCursor = (cursor?: string) => {
 };
 
 export class Store {
-  readonly models = createModels();
+  readonly models: ReturnType<typeof createModels>;
+  /** True when auth.json holds an Anthropic credential (API key or Claude subscription OAuth). */
+  readonly anthropic: boolean;
   readonly opened = new Map<string, Opened>();
   readonly errors = new Map<string, string>();
   readonly catalog: DatabaseSync;
@@ -192,6 +200,9 @@ export class Store {
   }
 
   private constructor(readonly options: StoreOptions) {
+    const credentials = options.authFile ? new FileCredentialStore(options.authFile) : undefined;
+    this.models = createModels({ credentials });
+    this.anthropic = options.provider !== "faux" && !!credentials?.has("anthropic");
     if (options.provider === "faux") installFaux(this.models);
     else {
       const provider = openrouterProvider();
@@ -205,6 +216,16 @@ export class Store {
       if (!this.present.length) throw Error("OpenRouter catalog has none of the curated models");
       this.catalogModels = catalog.filter((m) => this.present.some((c) => c.id === m.id));
       this.models.setProvider({ ...provider, getModels: () => this.catalogModels });
+      if (this.anthropic) {
+        const anthropic = anthropicProvider();
+        const all = anthropic.getModels();
+        for (const model of anthropicModels)
+          if (!all.some((m) => m.id === model.id)) throw Error(`Anthropic catalog missing ${model.id}`);
+        this.models.setProvider({
+          ...anthropic,
+          getModels: () => all.filter((m) => anthropicModels.some((c) => c.id === m.id)),
+        });
+      }
     }
     mkdirSync(options.dataDir, { recursive: true, mode: 0o700 });
     this.unlockCatalog = lockFile(`${this.catalogPath}.lock`);
@@ -283,6 +304,7 @@ export class Store {
 
   private defaultModel() {
     if (this.options.provider === "faux") return fauxModels[0].id;
+    if (this.anthropic) return anthropicDefaultModelId;
     return this.present.some((c) => c.id === defaultModelId) ? defaultModelId : this.present[0].id;
   }
 
@@ -306,7 +328,26 @@ export class Store {
       console.error("[models] live model list failed; using the built-in catalog:", e instanceof Error ? e.message : e);
       available = this.catalogModels;
     }
-    return this.present.flatMap((c) => {
+    const direct: ModelInfo[] = this.anthropic
+      ? anthropicModels.flatMap((c) => {
+          const m = this.models.getModel("anthropic", c.id);
+          return m
+            ? [
+                {
+                  id: m.id,
+                  provider: "anthropic",
+                  name: c.name,
+                  tier: c.tier,
+                  icon: c.icon,
+                  contextWindow: m.contextWindow,
+                  reasoning: m.reasoning,
+                  cost: { input: m.cost.input, output: m.cost.output },
+                },
+              ]
+            : [];
+        })
+      : [];
+    return direct.concat(this.present.flatMap((c) => {
       const m = available.find((m) => m.id === c.id);
       return m
         ? [
@@ -322,7 +363,7 @@ export class Store {
             },
           ]
         : [];
-    });
+    }));
   }
 
   routedModel(model?: ModelRef): ModelRef {
@@ -330,6 +371,10 @@ export class Store {
       const id = fauxModels.some((m) => m.id === model?.modelId) ? model!.modelId : fauxModels[0].id;
       return { provider: "faux", modelId: id };
     }
+    if (this.anthropic && model?.provider === "anthropic" && anthropicModels.some((m) => m.id === model.modelId))
+      return { provider: "anthropic", modelId: model.modelId };
+    if (this.anthropic && model?.provider !== "openrouter")
+      return { provider: "anthropic", modelId: anthropicDefaultModelId };
     const exact = model?.provider === "openrouter" ? model.modelId : `${model?.provider}/${model?.modelId}`;
     return {
       provider: "openrouter",
@@ -344,9 +389,11 @@ export class Store {
     const known =
       this.options.provider === "faux"
         ? m.provider === "faux" && fauxModels.some((f) => f.id === m.modelId)
-        : m.provider === "openrouter" &&
-          this.present.some((c) => c.id === m.modelId) &&
-          !!this.models.getModel(m.provider, m.modelId);
+        : m.provider === "anthropic"
+          ? this.anthropic && anthropicModels.some((c) => c.id === m.modelId) && !!this.models.getModel(m.provider, m.modelId)
+          : m.provider === "openrouter" &&
+            this.present.some((c) => c.id === m.modelId) &&
+            !!this.models.getModel(m.provider, m.modelId);
     if (!known) throw invalid(`Unknown model ${m.provider}/${m.modelId}. Choose one from GET /v1/device models`);
     return { provider: m.provider, modelId: m.modelId };
   }
@@ -549,7 +596,7 @@ export class Store {
             await tx.doc(JobRuns, c.id);
           },
           settings: {
-            extensions: [CodingTools, playground],
+            extensions: [CodingTools, playground, addons.all["omp-tools"]],
             // Read at every use, so a PATCH .../compaction applies from the next request.
             get compaction() {
               return compaction();

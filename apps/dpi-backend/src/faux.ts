@@ -7,6 +7,7 @@
 //   "check:[ <task id>|<job id>]" → one check_durable_job call
 //   "search: <words>" → one search_history call
 //   "page: <summary>" → one ping_on_call_engineer call
+//   "tool: <name> <args json>" → one call of any tool, e.g. tool: grep {"pattern":"TODO"}
 //   "state: <operation> <path>[ <value json>]" → one update_state call
 //   "Release check: …" (the release-check job's subagent) → one bash call
 //   anything else  → "Echo: <text>"
@@ -73,6 +74,10 @@ export function installFaux(models: MutableModels) {
     if (prompt.startsWith("state:")) {
       const [operation, path, ...value] = prompt.slice(6).trim().split(" ");
       return call("update_state", { operation, path, ...(value.length ? { value_json: value.join(" ") } : {}) });
+    }
+    if (prompt.startsWith("tool:")) {
+      const m = prompt.slice(5).trim().match(/^(\S+)\s*(\{.*\})?$/s);
+      return call(m?.[1] ?? "", m?.[2] ? JSON.parse(m[2]) : {});
     }
     if (prompt.startsWith("Release check:"))
       return call("bash", { command: "git log --oneline -5 2>/dev/null || echo 'no git history'; ls | head -5" });

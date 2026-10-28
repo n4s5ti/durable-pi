@@ -38,6 +38,7 @@ export const JobRuns = defineDoc<JobRunsDoc>({
   history: "latest",
   fork: "initial",
   initial: () => ({ counts: {}, items: {} }),
+  checkpointWhen: () => false,
 });
 
 /**
@@ -49,21 +50,43 @@ const StepValues = defineDoc<{ values: Record<string, { v: JsonValue; kind: JobS
   version: 1,
   scope: "task",
   initial: () => ({ values: {} }),
+  checkpointWhen: () => false,
 });
 
 type Values = Record<string, JobInputValue>;
 type Data = Record<string, JsonValue>;
 type JobInput = { job: string; input: Values };
-type Checkpoint = { phase: string; iteration: number; data: Data; approvalTask?: number };
+/** `paced`: this phase already took its PACE_MS pause, so waking from that sleep enters the phase. */
+type Checkpoint = { phase: string; iteration: number; data: Data; approvalTask?: number; paced?: boolean };
 type JobResult = { summary: string };
 type Run = TaskRuntime<JobInput, Checkpoint, JobResult, object>;
 type Running = RunningTask<JobInput, Checkpoint, JobResult>;
 
-/** Pause before each phase so a person can follow the run; durable, so a restart keeps the schedule. */
+/** Pause before each phase so a person can follow the run; a durable sleep, so a restart keeps the schedule. */
 const PACE_MS = 900;
 const MAX_RUNS = 30;
 const MAX_STEPS = 40;
 const RESULT_ROOT = "jobs";
+
+/**
+ * Wait inside a phase on the Harness clock, for polling while the phase holds its invocation. Not durable: the phase's
+ * end disarms it, and it rejects when the phase is aborted. Waits between phases are durable sleeps (`sleepUntil`).
+ */
+function pace(runtime: Pick<Run, "setTimer" | "signal">, ms: number) {
+  return new Promise<void>((resolve, reject) => {
+    const { signal } = runtime;
+    if (signal.aborted) return reject(signal.reason);
+    const onAbort = () => {
+      disarm();
+      reject(signal.reason);
+    };
+    const disarm = runtime.setTimer(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 const plain = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -175,10 +198,10 @@ interface Phase {
   readState(path: string): Promise<JsonValue | undefined>;
   /** Run a subagent with read and bash in an owned child conversation; its tool calls become steps. */
   agent(prompt: string): Promise<string>;
-  sleepUntil(at: number): Promise<void>;
 }
 
-type Outcome = { done: string; data?: Data } | { again: Data; summary?: string };
+/** `sleep`: end the phase asleep until that Harness time, then rerun it from the same checkpoint (a durable wait). */
+type Outcome = { done: string; data?: Data } | { again: Data; summary?: string } | { sleep: number };
 type Handler = (p: Phase) => Promise<Outcome>;
 
 const inDir = (dir: string, command: string) => (dir === "." ? command : `cd ${q(dir)} && ${command}`);
@@ -296,7 +319,8 @@ const HANDLERS: Record<string, Record<string, Handler>> = {
       const dir = String(p.input.path);
       const total = Number(p.input.checks);
       const n = p.iteration + 1;
-      await p.sleepUntil(Number(p.data.nextAt ?? 0));
+      const nextAt = Number(p.data.nextAt ?? 0);
+      if (p.now() < nextAt) return { sleep: nextAt };
       const before = (p.data.sums ?? {}) as Record<string, string>;
       const { sums, found } = await p.step("checkpoint", `Check ${n}/${total}`, async () => {
         const r = await p.shell(inDir(dir, `${FIND} -exec cksum {} + 2>/dev/null | head -300`));
@@ -401,7 +425,7 @@ export function createJobs(deps: JobsDeps) {
             );
             return;
           }
-          await runtime.sleep(runtime.now() + 500, ctx);
+          await pace(runtime, 500);
         }
       },
     },
@@ -494,7 +518,6 @@ export function createJobs(deps: JobsDeps) {
           return undefined;
         }
       },
-      sleepUntil: (at) => runtime.sleep(at, ctx),
       agent: async (prompt) => {
         let childId = 0;
         const stepId = `${spec.id}:${cp.iteration}:agent`;
@@ -579,7 +602,7 @@ export function createJobs(deps: JobsDeps) {
           runtime.signal.throwIfAborted();
           done = await Promise.race([
             settled,
-            runtime.sleep(runtime.now() + 600, ctx).then(
+            pace(runtime, 600).then(
               () => undefined,
               () => undefined,
             ),
@@ -686,7 +709,10 @@ export function createJobs(deps: JobsDeps) {
   async function runPhase(def: JobDef, index: number, task: Running, runtime: Run, ctx: Context) {
     const spec = def.phases[index];
     const cp = task.state.checkpoint;
-    if (index > 0 && cp.iteration === 0 && cp.approvalTask === undefined) await runtime.sleep(runtime.now() + PACE_MS, ctx);
+    if (index > 0 && cp.iteration === 0 && cp.approvalTask === undefined && !cp.paced) {
+      await runtime.sleepUntil(runtime.now() + PACE_MS, { ...cp, paced: true }, ctx);
+      return;
+    }
     if (spec.kind === "approval") return approvalPhase(def, index, task, runtime, ctx);
 
     // Enter the phase. Steps recorded by this same iteration mean a crash interrupted it: keep the finished steps
@@ -721,6 +747,10 @@ export function createJobs(deps: JobsDeps) {
     } catch (e) {
       if (runtime.signal.aborted) throw e;
       await fail(index, task, runtime, ctx, clip(String((e as Error)?.message ?? e), 400), "failed");
+      return;
+    }
+    if ("sleep" in outcome) {
+      await runtime.sleepUntil(outcome.sleep, cp, ctx);
       return;
     }
     if ("again" in outcome) {

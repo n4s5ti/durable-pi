@@ -269,7 +269,7 @@ Each device owns its agents and their data in SQLite. The hub only stores how to
 ### Folder structure
 
 ```text
-durable-pi/
+dpi/
 ├── dpi-network.example.yaml           # template for dpi-network.yaml (gitignored): devices, kinds, start_dirs
 ├── .env.example                       # OPENROUTER_API_KEY (+ ELEVENLABS_API_KEY for the demo voice)
 ├── justfile                           # install, check, and one module per work area
@@ -337,7 +337,7 @@ just proactive take        # reset and run the proactive demo
 - **`jev-damage-control` is a guard, not a sandbox.** It sends each command to a third-party API, and when Jev is unreachable the command runs.
 - **The proactive demo has no login** and its agents run `bash`. It binds `127.0.0.1` unless you pass `--host 0.0.0.0`.
 - **macOS devices run as a LaunchAgent** in the logged-in session, so unattended reboots need auto-login.
-- **pi-durable is experimental.** This repo pins 1.0.3.
+- **pi-durable pins 1.4.0.** Opening a SQLite storage with 1.4.0 migrates it to schema version 2, which 1.3.0 and earlier cannot open, so back up `~/.dpi` before moving across that line.
 
 ---
 
