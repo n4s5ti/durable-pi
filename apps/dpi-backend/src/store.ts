@@ -570,7 +570,7 @@ export class Store {
             await tx.doc(JobRuns, c.id);
           },
           settings: {
-            extensions: [CodingTools, playground],
+            extensions: [CodingTools, playground, addons.all["omp-tools"]],
             // Read at every use, so a PATCH .../compaction applies from the next request.
             get compaction() {
               return compaction();
