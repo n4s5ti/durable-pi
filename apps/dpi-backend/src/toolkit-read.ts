@@ -1,11 +1,10 @@
-// What Oh My Pi's read does beyond text files, as tools of their own beside pi-durable's read (adapted from Oh My Pi,
-// MIT; see omp-tools.ts). SQLite opens read-only in this process; archives go through bsdtar (libarchive) and PDFs
+// Files beyond plain text, as tools of their own beside pi-durable's read (license notice in toolkit.ts). SQLite opens read-only in this process; archives go through bsdtar (libarchive) and PDFs
 // through pdftotext on the session's device; Office, OpenDocument and EPUB files are zips of XML read the same way.
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ToolExecutionApi } from "@earendil-works/pi-durable";
 import type { Context } from "@earendil-works/chord";
 import { DatabaseSync } from "node:sqlite";
-import { clip, decodeEntities, htmlToMarkdown, MAX_TEXT, run, sessionPath, text } from "./omp-common.js";
+import { clip, decodeEntities, htmlToMarkdown, MAX_TEXT, run, sessionPath, text } from "./toolkit-common.js";
 
 // ------------------------------------------------------------------ read_sqlite
 
