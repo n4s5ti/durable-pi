@@ -7,25 +7,20 @@
 //   glob      files by glob, newest first (ripgrep)
 //   ast_grep  structural code search (ast-grep)
 //   todo      a phased task list, one durable document per conversation
+//
+// and, in their own files:
+//
+//   read_sqlite, read_archive, read_document   omp-read.ts: what Oh My Pi's read does beyond text files
+//   web_search, fetch_url                      omp-web.ts: search providers and pages as Markdown
+//   github                                     omp-github.ts: read-only GitHub through the gh CLI
 import { Type } from "@earendil-works/pi-ai";
-import { defineDoc, defineExtension, defineTool, section, type ToolExecutionApi } from "@earendil-works/pi-durable";
-import type { Context } from "@earendil-works/chord";
+import { defineDoc, defineExtension, defineTool, section } from "@earendil-works/pi-durable";
+import { run, text } from "./omp-common.js";
+import { GITHUB_TOOLS } from "./omp-github.js";
+import { READ_TOOLS } from "./omp-read.js";
+import { WEB_TOOLS } from "./omp-web.js";
 
-const MAX_OUTPUT = 400_000;
-const text = (value: string) => ({ output: [{ type: "text" as const, text: value }] });
 const plain = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
-
-/** Run a program (argv, no shell) in the call's environment; its stdout and stderr arrive merged. */
-async function run(api: Pick<ToolExecutionApi, "env">, argv: string[], ctx: Context) {
-  if (!api.env) throw Error("This session has no execution environment");
-  let out = "";
-  const result = await api.env.exec(argv, { timeout: 30, onOutput: (chunk) => void (out.length < MAX_OUTPUT && (out += chunk)) }, ctx);
-  if (!result.ok) {
-    if (result.error.code === "spawn_error") throw Error(`Could not run ${argv[0]}; is it installed on this device? ${result.error.message}`);
-    throw Error(`${argv[0]}: ${result.error.message}`);
-  }
-  return { code: result.value.exitCode, out, truncated: out.length >= MAX_OUTPUT };
-}
 
 /**
  * Oh My Pi's `path` list: `;`-separated paths and globs, `!glob` excludes. Bare globs match at any depth. No paths
@@ -385,7 +380,7 @@ const todo = defineTool({
   },
 });
 
-export const OMP_TOOLS = [think, grep, glob, astGrep, todo];
+export const OMP_TOOLS = [think, grep, glob, astGrep, todo, ...READ_TOOLS, ...WEB_TOOLS, ...GITHUB_TOOLS];
 
 export const OmpTools = defineExtension({
   name: "omp-tools",
@@ -394,7 +389,7 @@ export const OmpTools = defineExtension({
     section(
       "omp-tools",
       () =>
-        "Search with grep (text and regex), glob (files by name) and ast_grep (code structure) rather than grep, find or rg in bash. Track work of 3 or more steps with todo, called alongside your other tool calls, never on its own.",
+        "Search with grep (text and regex), glob (files by name) and ast_grep (code structure) rather than grep, find or rg in bash. Track work of 3 or more steps with todo, called alongside your other tool calls, never on its own. Open SQLite files, archives and documents (PDF, Word, Excel, PowerPoint, EPUB) with read_sqlite, read_archive and read_document. Use web_search to find things online and fetch_url to read a page; use github for repositories, issues, pull requests, CI runs and files on GitHub.",
       { tag: false },
     ),
   ],

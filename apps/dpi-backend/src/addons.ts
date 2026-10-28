@@ -4,7 +4,7 @@
 //
 //   system-prompts       a checklist of built-in system prompts, rendered as one section
 //   jev-damage-control   Jev judges every bash command before it runs and blocks destructive ones
-//   omp-tools            think, grep, glob, ast_grep and todo, ported from Oh My Pi (omp-tools.ts)
+//   omp-tools            search, todo, documents, web and GitHub tools ported from Oh My Pi (omp-tools.ts)
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { defineDoc, defineExtension, hook, section, ToolTask, type Extension } from "@earendil-works/pi-durable";
@@ -100,7 +100,7 @@ export const ADDON_INFO: Omit<HarnessExtensionInfo, "enabled" | "prompts">[] = [
     name: "omp-tools",
     title: "Oh My Pi tools",
     description:
-      "think, grep, glob and ast_grep (via rg and ast-grep on the device) plus a todo list that survives restarts, ported from Oh My Pi. On for new sessions.",
+      "Ported from Oh My Pi: grep, glob and ast_grep search; a todo list that survives restarts; think; read_sqlite, read_archive and read_document (PDF, Office, EPUB); web_search and fetch_url; read-only github. On for new sessions.",
   },
 ];
 
