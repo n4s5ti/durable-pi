@@ -17,6 +17,7 @@ import { askJev, type JevAnswer, type JevQuestion } from "./jev.js";
 import type { SharedState } from "./shared-state.js";
 import { Toolkit } from "./toolkit.js";
 import { createUiTools } from "./ui-tools.js";
+import type { UiView } from "../../dpi-sdk/src/ui-spec.js";
 
 const PROMPTS_DIR = join(import.meta.dirname, "../prompts");
 
@@ -112,11 +113,11 @@ export const ADDON_INFO: Omit<HarnessExtensionInfo, "enabled" | "prompts">[] = [
     name: "ui-tools",
     title: "UI tools",
     description:
-      "Read-only views on the live canvas from a fixed component catalog (cards, metrics, tables, progress…), plus UI templates saved on this device for any agent to reuse: ui_render, ui_clear, ui_template_save, ui_template_list, ui_template_use.",
+      "Read-only views on the live canvas from a fixed component catalog (cards, metrics, tables, progress…), plus UI templates saved on this device for any agent to reuse: ui_render, ui_clear, ui_template_save, ui_template_list, ui_template_use; and ui_prefab to pin dpi's built-in views of this device (providers, models, usage, add-ons).",
   },
 ];
 
-export function createAddons(opts: { offline: boolean; shared: SharedState }) {
+export function createAddons(opts: { offline: boolean; shared: SharedState; prefabs: () => Promise<UiView[]> }) {
   const prompts = defineExtension({
     name: "system-prompts",
     sections: [
@@ -155,7 +156,7 @@ export function createAddons(opts: { offline: boolean; shared: SharedState }) {
       }),
     ],
   });
-  const uiTools = createUiTools(opts.shared);
+  const uiTools = createUiTools(opts.shared, opts.prefabs);
   const all: Record<string, Extension> = {
     "system-prompts": prompts,
     "jev-damage-control": jev,

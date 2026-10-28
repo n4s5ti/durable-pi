@@ -179,3 +179,22 @@ test("agui: a patch that does not fit the state throws instead of guessing", () 
     assert.throws(() => applyPatch(state, [op]), undefined, JSON.stringify(op));
   assert.equal(state.devices["box-a"].status, "online", "the input state is never mutated");
 });
+
+test("agui: dpi's own device views (prefabs) are projected and re-checked too", () => {
+  const good = { type: "badge", text: "working", tone: "accent" };
+  const d = device("box", []);
+  d.tree!.views = [
+    {
+      id: "dpi.providers",
+      title: "Providers",
+      spec: good,
+      template: "dpi.providers",
+      updatedAt: 3,
+    },
+    { id: "dpi.bad", title: "Bad", spec: { type: "script", text: "x" }, updatedAt: 4 },
+  ];
+  const views = projectCanvas([d]).devices.box.views;
+  assert.deepEqual(Object.keys(views), ["dpi.providers"]);
+  assert.equal(views["dpi.providers"].template, "dpi.providers");
+  assert.deepEqual(projectCanvas([device("bare", [])]).devices.bare.views, {});
+});

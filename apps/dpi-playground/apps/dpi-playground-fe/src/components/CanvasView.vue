@@ -1,7 +1,7 @@
 <script setup lang="ts">
-// The network as a live, read-only graph from the hub's AG-UI stream (/api/agui), with the views
-// agents published (ui-tools add-on) under it. Clicking a session or agent opens it in the chat;
-// nothing on this view writes to a device.
+// The network as a live, read-only graph from the hub's AG-UI stream (/api/agui), with dpi's own
+// views of each device (prefabs) and the views agents published (ui-tools add-on) under it.
+// Clicking a session or agent opens it in the chat; nothing on this view writes to a device.
 import { computed, onBeforeUnmount } from "vue";
 import { canvasLive, canvasLoaded, canvasState, useCanvasFeed } from "../client/agui";
 import { layoutCanvas, NODE_H, NODE_W, type CanvasNode } from "../client/canvas-layout";
@@ -26,8 +26,19 @@ const hidden = computed(() => {
 });
 
 /** Every agent's published views, newest first, with who made them. */
-const views = computed(() =>
-  Object.values(canvasState.value.devices)
+/** dpi's own views of each device (prefabs) first, in their fixed order; then agents' views, newest first. */
+const views = computed(() => {
+  const devices = Object.values(canvasState.value.devices);
+  const own = devices.flatMap((d) =>
+    Object.values(d.views ?? {}).map((v) => ({
+      ...v,
+      key: `${d.id}/${v.id}`,
+      owner: `${d.name} · dpi`,
+      template: null,
+      busy: false,
+    })),
+  );
+  const agents = devices
     .flatMap((d) =>
       Object.values(d.sessions).flatMap((s) =>
         Object.values(s.agents).flatMap((a) =>
@@ -40,8 +51,9 @@ const views = computed(() =>
         ),
       ),
     )
-    .sort((x, y) => y.updatedAt - x.updatedAt),
-);
+    .sort((x, y) => y.updatedAt - x.updatedAt);
+  return [...own, ...agents];
+});
 
 const curve = (fromKey: string, toKey: string) => {
   const a = byKey.value.get(fromKey);

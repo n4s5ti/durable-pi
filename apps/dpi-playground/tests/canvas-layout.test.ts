@@ -26,6 +26,7 @@ const state = (agents: CanvasAgent[]): CanvasState => ({
       error: null,
       lastSeenAt: null,
       moreSessions: 0,
+      views: {},
       sessions: {
         s1: {
           id: "s1",

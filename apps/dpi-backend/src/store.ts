@@ -63,6 +63,8 @@ import { createPlayground, Workspace, type SpawnSession } from "./extensions.js"
 import { createJobs, JobRuns, JOB_DEFS, jobDef, resolveJobInput, type Jobs } from "./jobs.js";
 import { ADDON_INFO, createAddons, PROMPTS, PromptChecklist, type Addons } from "./addons.js";
 import { UiViews, viewsOf } from "./ui-tools.js";
+import { buildPrefabs, checkOpenRouter, type DeviceFacts, type ProviderFacts } from "./prefabs.js";
+import type { UiView } from "../../dpi-sdk/src/ui-spec.js";
 import { JOB_RUNS_DOC } from "../../dpi-sdk/src/jobs.js";
 
 /** The pi-durable version this backend pins, read from package.json so the reported version cannot drift from it. */
@@ -170,6 +172,10 @@ export class Store {
   shared!: SharedState;
   uid!: string;
   modelList: ModelInfo[] = [];
+  private credentialStore?: FileCredentialStore;
+  private prefabViews: UiView[] = [];
+  private openrouterCheck?: { at: number; key: string; facts: Partial<ProviderFacts> };
+  private openrouterChecking?: Promise<void>;
   /** Curated models the OpenRouter catalog has, and those catalog entries. */
   private present: (typeof curatedModels)[number][] = [...curatedModels];
   private catalogModels: ReturnType<ReturnType<typeof openrouterProvider>["getModels"]> = [];
@@ -202,6 +208,7 @@ export class Store {
 
   private constructor(readonly options: StoreOptions) {
     const credentials = options.authFile ? new FileCredentialStore(options.authFile) : undefined;
+    this.credentialStore = credentials;
     this.models = createModels({ credentials });
     this.anthropic = options.provider !== "faux" && !!credentials?.has("anthropic");
     if (options.provider === "faux") installFaux(this.models);
@@ -591,7 +598,7 @@ export class Store {
       const playground = createPlayground(this.shared, row.id, this.spawnSession, jobs);
       registry.install(playground);
       // Custom extensions are installed but not selected: an agent turns them on in its own selection.
-      const addons = createAddons({ offline: this.options.provider === "faux", shared: this.shared });
+      const addons = createAddons({ offline: this.options.provider === "faux", shared: this.shared, prefabs: () => this.prefabs() });
       for (const extension of addons.list) registry.install(extension);
       const harness = await Harness.open(
         await openNodeSqliteStorage(row.dbPath),
@@ -1245,7 +1252,79 @@ export class Store {
 
   async tree(): Promise<DeviceTree> {
     const sessions = await Promise.all(this.list().map((row) => this.sessionSummary(row)));
-    return { uid: this.uid, name: this.name, sessions, at: Date.now() };
+    const views = await this.prefabs(sessions).catch((e) => {
+      console.error("[prefabs] left out of the tree:", e instanceof Error ? e.message : e);
+      return [];
+    });
+    return { uid: this.uid, name: this.name, sessions, ...(views.length ? { views } : {}), at: Date.now() };
+  }
+
+  // ------------------------------------------------------------ prefabs (dpi's own map)
+
+  /** The device's prefab views from what it knows now; updatedAt moves only when a view changes. */
+  async prefabs(sessions?: SessionSummary[]): Promise<UiView[]> {
+    const facts = await this.deviceFacts(sessions ?? (await Promise.all(this.list().map((r) => this.sessionSummary(r)))));
+    this.prefabViews = buildPrefabs(facts, this.prefabViews);
+    return this.prefabViews;
+  }
+
+  private async deviceFacts(sessions: SessionSummary[]): Promise<DeviceFacts> {
+    const rows = new Map(this.list().map((r) => [r.id, r]));
+    const usage = await Promise.all(
+      sessions.map(async (s) => {
+        const row = rows.get(s.id);
+        return row && this.opened.has(row.id) ? this.usage(this.harness(row)).catch(() => undefined) : undefined;
+      }),
+    );
+    return {
+      providers: await this.providerFacts(),
+      models: this.modelList,
+      defaultModel: this.defaultModel(),
+      sessions: sessions.map((s, i) => ({ name: s.name, model: s.model, agents: s.agents.length, busy: s.busy, usage: usage[i] })),
+      addons: ADDON_INFO.map((a) => ({ name: a.name, title: a.title, description: a.description, onForNewSessions: a.name === "toolkit" })),
+    };
+  }
+
+  /** Each provider's sign-in kind and status. Only whether a credential exists is read, never its value. */
+  private async providerFacts(): Promise<ProviderFacts[]> {
+    const count = (provider: string) => this.modelList.filter((m) => m.provider === provider).length;
+    if (this.options.provider === "faux")
+      return [{ id: "faux", name: "Faux (offline test model)", credential: "none", status: "ok", models: count("faux") }];
+    const stored = new Map(((await this.credentialStore?.list().catch(() => [])) ?? []).map((c) => [c.providerId, c.type]));
+    const kind = (type: string | undefined) => (type === "oauth" ? "subscription (OAuth)" : type ? "API key" : "none");
+    const anthropic: ProviderFacts = this.anthropic
+      ? {
+          id: "anthropic",
+          name: "Anthropic",
+          credential: kind(stored.get("anthropic")),
+          status: "unchecked",
+          detail: "Signed in through auth.json. dpi does not read subscription limits.",
+          models: count("anthropic"),
+        }
+      : {
+          id: "anthropic",
+          name: "Anthropic",
+          credential: "none",
+          status: "missing",
+          detail: "Not signed in. Sign in with pi-ai login anthropic in the dpi home.",
+          models: 0,
+        };
+    const key = process.env.OPENROUTER_API_KEY ?? "";
+    const openrouter: ProviderFacts = { id: "openrouter", name: "OpenRouter", credential: key ? "API key" : "none", status: "missing", models: count("openrouter") };
+    if (!key) openrouter.detail = "No OPENROUTER_API_KEY in backend.env.";
+    else {
+      // One check per key every 5 minutes, off the tree's path: until it answers the last result (or
+      // "checking") shows, and the answer wakes the streams through notify().
+      const last = this.openrouterCheck?.key === key ? this.openrouterCheck : undefined;
+      if ((!last || Date.now() - last.at >= 300_000) && !this.openrouterChecking)
+        this.openrouterChecking = checkOpenRouter(key).then((facts) => {
+          this.openrouterCheck = { at: Date.now(), key, facts };
+          this.openrouterChecking = undefined;
+          this.notify();
+        });
+      Object.assign(openrouter, last?.facts ?? { status: "unchecked", detail: "Checking the key with OpenRouter…" });
+    }
+    return [anthropic, openrouter];
   }
 
   // ------------------------------------------------------------ demo extension
