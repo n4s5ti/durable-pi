@@ -1,4 +1,4 @@
-/* Durable Agent Network layout: tree | inspector | agent. Loaded after style.css.
+/* Durable Agent Network layout: tree | agent (chat) | inspector. Loaded after style.css.
    Both side panels collapse to a 52px icon rail. */
 .net-workspace {
   --tree-w: 300px;
@@ -25,13 +25,24 @@
 .net-workspace > .inspector {
   width: var(--inspector-w);
   flex: 0 0 auto;
-  border-right: 1px solid var(--line);
-  border-left: 0;
+  border-left: 1px solid var(--line);
+  border-right: 0;
   max-height: none;
   min-height: 0;
 }
 .net-workspace > .inspector.collapsed {
   width: var(--rail-w);
+}
+/* Inspector expanded on a wide screen: chat takes the fixed, draggable column and
+   the inspector fills the rest. */
+.net-workspace.chat-fixed > .chat-panel {
+  flex: 0 0 var(--chat-w);
+  width: var(--chat-w);
+}
+.net-workspace.chat-fixed > .inspector:not(.collapsed) {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 360px;
 }
 .network-summary {
   display: inline-flex;
@@ -555,12 +566,12 @@
   }
   .net-workspace > .inspector.overlay {
     position: absolute;
-    left: 0;
+    right: 0;
     top: 0;
     bottom: 0;
     width: min(420px, 100%);
     z-index: 30;
-    box-shadow: 20px 0 60px #0008;
+    box-shadow: -20px 0 60px #0008;
   }
   .inspector-backdrop {
     display: block;

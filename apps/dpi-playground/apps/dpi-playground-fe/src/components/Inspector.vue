@@ -9,15 +9,17 @@ import {
   Server,
   ShieldCheck,
   Wrench,
-  PanelLeftClose,
-  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
   Puzzle,
+  Workflow,
 } from "lucide-vue-next";
 import { THINKING_LEVELS, type ThinkingLevel } from "@sdk/api";
 import type { StateChange } from "@sdk/app-state";
 import StateEditor from "./StateEditor.vue";
 import TasksPanel from "./TasksPanel.vue";
 import ExtensionsPanel from "./ExtensionsPanel.vue";
+import CanvasView from "./CanvasView.vue";
 import ContextBar from "./ContextBar.vue";
 import { message } from "../client/hub";
 import { toolSignature } from "../client/signature";
@@ -58,6 +60,7 @@ const tabs = [
   { id: "tasks", label: "Tasks", icon: Activity },
   { id: "tools", label: "Tools", icon: Wrench },
   { id: "extensions", label: "Extend", icon: Puzzle },
+  { id: "canvas", label: "Canvas", icon: Workflow },
 ];
 const usageRows = computed(() => [
   { label: "Input", tokens: usage.value.input, cost: usage.value.inputCost },
@@ -161,7 +164,7 @@ const offeredTools = computed(() => detail.value?.tools.filter((t) => t.offered)
         :title="`Expand inspector (${panelKeys.inspector})`"
         @click="showInspector()"
       >
-        <PanelLeftOpen :size="18" />
+        <PanelRightOpen :size="18" />
       </button>
       <button
         v-for="t in tabs"
@@ -200,13 +203,13 @@ const offeredTools = computed(() => detail.value?.tools.filter((t) => t.offered)
           :title="`Collapse inspector (${panelKeys.inspector})`"
           @click="hideInspector()"
         >
-          <PanelLeftClose :size="18" />
+          <PanelRightClose :size="18" />
         </button>
       </div>
       <div
         id="inspector-panel"
         class="inspector-body"
-        :class="{ 'session-panel': ui.tab === 'session' }"
+        :class="{ 'session-panel': ui.tab === 'session', 'canvas-panel': ui.tab === 'canvas' }"
         role="tabpanel"
         :aria-labelledby="`inspector-tab-${ui.tab}`"
       >
@@ -355,6 +358,7 @@ const offeredTools = computed(() => detail.value?.tools.filter((t) => t.offered)
         </template>
         <TasksPanel v-if="ui.tab === 'tasks'" />
         <ExtensionsPanel v-if="ui.tab === 'extensions'" />
+        <CanvasView v-if="ui.tab === 'canvas'" />
         <template v-if="ui.tab === 'tools'"
           ><div class="panel-heading">
             <h2>Tools</h2>

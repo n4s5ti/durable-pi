@@ -19,6 +19,8 @@ export const configFile = ref<string>();
 export const selected = ref<AgentTarget>();
 export const expanded = ref(new Set<string>());
 export const treeWidth = ref(300);
+/** Width of the chat column, which sits left of the inspector; drag its right edge. */
+export const chatWidth = ref(450);
 /** Which side panels are expanded (persisted). Collapsed panels shrink to an icon rail. */
 export const layout = reactive({ tree: true, inspector: true });
 const uiLoaded = ref(false);
@@ -108,16 +110,18 @@ watch(
   (v) => uiLoaded.value && void hub.uiSet("tree.selected", v ?? null).catch(() => {}),
 );
 watch(treeWidth, (v) => uiLoaded.value && saveLater("tree.width", v));
+watch(chatWidth, (v) => uiLoaded.value && saveLater("chat.width", v));
 watch(layout, (v) => uiLoaded.value && saveLater("layout.panels", { ...v }));
 
 export async function boot() {
   stream.start();
   try {
-    const [net, sel, width, panels] = await Promise.all([
+    const [net, sel, width, panels, chatW] = await Promise.all([
       hub.network(),
       hub.uiGet<AgentTarget>("tree.selected"),
       hub.uiGet<number>("tree.width"),
       hub.uiGet<{ tree: boolean; inspector: boolean }>("layout.panels"),
+      hub.uiGet<number>("chat.width"),
     ]);
     if (panels) Object.assign(layout, panels);
     configFile.value = net.configFile;
@@ -126,6 +130,7 @@ export async function boot() {
     // Every device starts folded; select() opens only the active device, workspace and agent.
     expanded.value = new Set();
     if (width) treeWidth.value = width;
+    if (chatW) chatWidth.value = chatW;
     if (sel && net.devices.some((d) => d.id === sel.deviceId)) select(sel);
     else autoSelect(net.devices);
   } catch (e) {
@@ -240,8 +245,6 @@ export const ui = reactive({
   drawer: false,
   /** Narrow screens: the inspector opens over the chat instead of taking a column. */
   inspectorOverlay: false,
-  /** The live network canvas replaces the main view while open. */
-  canvas: false,
   tab: "session",
   composer: "",
   dialog: undefined as Dialog | undefined,

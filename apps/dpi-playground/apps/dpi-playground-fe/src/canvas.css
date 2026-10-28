@@ -1,5 +1,11 @@
 /* Live network canvas (CanvasView.vue): a read-only graph fed by the hub's AG-UI stream. */
-.net-workspace > .canvas-view {
+/* The canvas lives in the inspector's Canvas tab and fills its body. */
+.inspector-body.canvas-panel {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+.inspector-body.canvas-panel > .canvas-view {
   flex: 1 1 auto;
   min-width: 0;
 }
