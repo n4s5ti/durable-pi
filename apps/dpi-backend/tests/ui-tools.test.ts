@@ -104,6 +104,28 @@ test("ui-tools: render, replace, template save/list/use across sessions, clear, 
     );
     assert.match(await b.call("ui_template_use", { name: "nope", id: "x", title: "X", values: {} }), /No template "nope"/);
 
+    // Prefabs: dpi's own views ride on the device tree, are listed as built-ins, and their names are
+    // reserved; ui_prefab pins a snapshot as the agent's view.
+    const tree = await store.tree();
+    assert.deepEqual(tree.views?.map((v) => v.id), ["dpi.providers", "dpi.models", "dpi.usage", "dpi.addons"]);
+    const usageView = JSON.stringify(tree.views!.find((v) => v.id === "dpi.usage")!.spec);
+    assert.match(usageView, /\["Ui one","1","",/, "the usage view lists this test's sessions");
+    assert.match(JSON.stringify(tree.views![0].spec), /Faux \(offline test model\)/);
+    assert.match(await a.call("ui_template_list", {}), /service-health: .*\n(.*\n)*dpi\.providers: This device's model providers/);
+    assert.match(
+      await a.call("ui_template_save", { name: "dpi.mine", description: "x", spec: status }),
+      /built-in prefabs; pick another name/,
+    );
+    assert.match(
+      await a.call("ui_template_use", { name: "dpi.usage", id: "u", title: "U", values: {} }),
+      /built-in prefab with live data: show it with ui_prefab/,
+    );
+    assert.match(await a.call("ui_prefab", { name: "dpi.usage" }), /Showing view "dpi.usage"/);
+    const pinned = (await a.views()).find((v) => v.id === "dpi.usage")!;
+    assert.equal(pinned.title, "Usage (snapshot)");
+    assert.equal(pinned.template, "dpi.usage");
+    assert.match(await a.call("ui_clear", { id: "dpi.usage" }), /Removed 1 view/);
+
     assert.match(await a.call("ui_clear", { id: "build" }), /Removed 1 view/);
     assert.deepEqual(await a.views(), [], "a cleared view leaves the tree");
     assert.match(await b.call("ui_clear", { id: "*" }), /Removed 1 view/);

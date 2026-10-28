@@ -165,6 +165,8 @@ export interface DeviceTree {
   uid: string;
   name: string;
   sessions: SessionSummary[];
+  /** dpi's own views of this device (prefabs: providers, models, usage, add-ons) for the canvas. */
+  views?: UiView[];
   at: number;
 }
 

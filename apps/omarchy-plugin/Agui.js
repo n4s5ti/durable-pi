@@ -114,7 +114,7 @@ function toNetwork(state) {
   };
 }
 
-/** Nodes and edges for the canvas: device → session → root agents → forks and subagents → views. */
+/** Nodes and edges for the canvas: device → its own views and sessions → root agents → forks and subagents → views. */
 function toGraph(state) {
   var nodes = [];
   var edges = [];
@@ -128,6 +128,19 @@ function toGraph(state) {
       detail: d.status === "online" ? sessions.length + " sessions" : String(d.error || d.status),
       online: d.status === "online",
       busy: false,
+    });
+    values(d.views).forEach(function(v) {
+      var viewKey = "v:" + d.id + "/" + v.id;
+      nodes.push({
+        id: viewKey,
+        type: "view",
+        label: String(v.title),
+        detail: "dpi · " + String(d.name || d.id),
+        online: true,
+        busy: false,
+        spec: v.spec,
+      });
+      edges.push({ id: deviceKey + ">" + viewKey, from: deviceKey, to: viewKey });
     });
     sessions.forEach(function(s) {
       var sessionKey = "s:" + d.id + "/" + s.id;

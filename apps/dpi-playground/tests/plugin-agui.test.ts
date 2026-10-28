@@ -172,3 +172,27 @@ test("plugin Agui.js: the bar's network view and the canvas graph come from the 
     },
   );
 });
+
+test("plugin Agui.js: dpi's own device views hang off the device node", () => {
+  const d = device("box", []);
+  d.tree!.views = [
+    {
+      id: "dpi.providers",
+      title: "Providers",
+      spec: { type: "badge", text: "working" },
+      updatedAt: 1,
+    },
+  ];
+  const graph = agui.toGraph(projectCanvas([d]));
+  assert.deepEqual(
+    graph.nodes.map((n) => [n.id, n.type]),
+    [
+      ["d:box", "device"],
+      ["v:box/dpi.providers", "view"],
+    ],
+  );
+  assert.deepEqual(
+    graph.edges.map((e) => e.id),
+    ["d:box>v:box/dpi.providers"],
+  );
+});

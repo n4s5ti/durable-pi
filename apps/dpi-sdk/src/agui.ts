@@ -45,6 +45,8 @@ export interface CanvasDevice {
   lastSeenAt: number | null;
   sessions: Record<string, CanvasSession>;
   moreSessions: number;
+  /** dpi's own views of the device (prefabs), re-checked like agent views. */
+  views: Record<string, CanvasView>;
 }
 
 export interface CanvasState {
@@ -88,6 +90,7 @@ export function projectCanvas(devices: NetworkDevice[]): CanvasState {
       lastSeenAt: d.lastSeenAt ?? null,
       sessions: {},
       moreSessions: Math.max(0, sessions.length - CANVAS_LIMITS.sessions),
+      views: projectViews(d.tree?.views),
     };
     for (const s of sessions.slice(0, CANVAS_LIMITS.sessions)) {
       const session: CanvasSession = {

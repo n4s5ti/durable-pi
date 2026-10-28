@@ -8,6 +8,7 @@
 //   ui_template_save   save a spec with {{slots}} under a name (device-wide)
 //   ui_template_list   the saved templates, their descriptions and slots
 //   ui_template_use    fill a template's slots and publish the result as a view
+//   ui_prefab          pin a snapshot of one of dpi's own views (prefabs.ts) as your view
 import { Type } from "@earendil-works/pi-ai";
 import { defineDoc, defineExtension, defineTool, section } from "@earendil-works/pi-durable";
 import {
@@ -20,6 +21,7 @@ import {
   type UiView,
 } from "../../dpi-sdk/src/ui-spec.js";
 import type { SharedState } from "./shared-state.js";
+import { PREFAB_INFO, PREFAB_NAMES, type PrefabName } from "./prefabs.js";
 import { text } from "./toolkit-common.js";
 
 /** The agent's published views by id, each as checked JSON. A fork starts with its parent's views. */
@@ -91,7 +93,9 @@ export const viewsOf = (doc: { views: Record<string, string> } | undefined): UiV
     .map((json) => JSON.parse(json) as UiView)
     .sort((a, b) => a.updatedAt - b.updatedAt);
 
-export function createUiTools(shared: SharedState) {
+const BUILT_IN = "dpi.";
+
+export function createUiTools(shared: SharedState, prefabs: () => Promise<UiView[]>) {
   const render = defineTool({
     name: "ui_render",
     description: `Show a read-only view on the user's live canvas, attached to you. Publishing an existing id replaces that view. Use it for dashboards, status, results and summaries the user should see at a glance.\n${CATALOG}`,
@@ -138,6 +142,7 @@ export function createUiTools(shared: SharedState) {
     execute: async (args) => {
       const { name, description, spec } = args as { name: string; description: string; spec: unknown };
       checkId(name, "template name");
+      if (name.startsWith(BUILT_IN)) throw Error(`Names starting with "${BUILT_IN}" are dpi's built-in prefabs; pick another name.`);
       if (!description.trim() || description.length > 300) throw Error("description must be 1-300 characters");
       const template = specOf(spec);
       checkUiSpec(template, { template: true });
@@ -154,10 +159,9 @@ export function createUiTools(shared: SharedState) {
     replay: "safe",
     execute: async () => {
       const all = Object.values(await shared.templates()).sort((a, b) => a.name.localeCompare(b.name));
-      if (!all.length) return text("No UI templates yet. Save one with ui_template_save.");
-      return text(
-        all.map((t) => `${t.name}: ${t.description}${t.slots.length ? ` [slots: ${t.slots.join(", ")}]` : ""}`).join("\n"),
-      );
+      const builtIn = PREFAB_NAMES.map((n) => `${n}: ${PREFAB_INFO[n].description} [built-in, live dpi data: ui_prefab]`);
+      const saved = all.map((t) => `${t.name}: ${t.description}${t.slots.length ? ` [slots: ${t.slots.join(", ")}]` : ""}`);
+      return text([...(saved.length ? saved : ["No saved templates yet. Save one with ui_template_save."]), ...builtIn].join("\n"));
     },
   });
 
@@ -175,6 +179,7 @@ export function createUiTools(shared: SharedState) {
       const { name, id, title, values } = args as { name: string; id: string; title: string; values: Record<string, string> };
       checkId(id);
       checkTitle(title);
+      if (name.startsWith(BUILT_IN)) throw Error(`"${name}" is a built-in prefab with live data: show it with ui_prefab.`);
       const template = (await shared.templates())[name];
       if (!template) throw Error(`No template "${name}". See ui_template_list.`);
       const spec: UiNode = fillTemplate(template.spec, values ?? {});
@@ -182,14 +187,35 @@ export function createUiTools(shared: SharedState) {
     },
   });
 
+  const prefab = defineTool({
+    name: "ui_prefab",
+    description: `Pin a snapshot of one of dpi's built-in views of this device as one of your views. The device already shows them live; pin one to keep it beside your own work. ${PREFAB_NAMES.map((n) => `${n}: ${PREFAB_INFO[n].description}`).join(" ")}`,
+    parameters: Type.Object({
+      name: Type.Union(PREFAB_NAMES.map((n) => Type.Literal(n))),
+      id: Type.Optional(idParam),
+      title: Type.Optional(Type.String({ description: "Shown above the view (default: the prefab's title)" })),
+    }),
+    replay: "safe",
+    execute: async (args, api, ctx) => {
+      const { name, id, title } = args as { name: PrefabName; id?: string; title?: string };
+      const view = (await prefabs()).find((v) => v.id === name);
+      if (!view) throw Error(`No prefab "${name}". Built-ins: ${PREFAB_NAMES.join(", ")}`);
+      const viewId = id ?? name;
+      checkId(viewId);
+      const shown = title ?? `${view.title} (snapshot)`;
+      checkTitle(shown);
+      return publish(api, ctx, { id: viewId, title: shown, spec: checkUiSpec(view.spec), template: name, updatedAt: Date.now() });
+    },
+  });
+
   return defineExtension({
     name: "ui-tools",
-    tools: [render, clear, save, list, use],
+    tools: [render, clear, save, list, use, prefab],
     sections: [
       section(
         "ui-tools",
         () =>
-          "You can show the user read-only views on their live canvas with ui_render: dashboards, status and results built from a fixed component catalog (no HTML). Before building a layout from scratch, check ui_template_list and reuse a template with ui_template_use; save layouts worth repeating with ui_template_save. Keep views current: replace a view by id as things change, and ui_clear views that no longer matter.",
+          "You can show the user read-only views on their live canvas with ui_render: dashboards, status and results built from a fixed component catalog (no HTML). Before building a layout from scratch, check ui_template_list and reuse a template with ui_template_use; save layouts worth repeating with ui_template_save. dpi's own views of this device (providers, models, usage, add-ons) are built in: pin one with ui_prefab rather than rebuilding it. Keep views current: replace a view by id as things change, and ui_clear views that no longer matter.",
         { tag: false },
       ),
     ],
