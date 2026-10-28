@@ -436,6 +436,33 @@
   margin-left: 4px;
   color: #8d6a6d;
 }
+.job-def-inputs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+.job-def-inputs label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.job-def-inputs label.wide {
+  grid-column: 1 / -1;
+}
+.job-def-inputs span {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 14px;
+  color: var(--secondary);
+}
+.job-def-inputs input,
+.job-def-inputs textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.job-def-inputs textarea {
+  resize: vertical;
+}
 .job-def-meta {
   display: flex;
   flex-wrap: wrap;

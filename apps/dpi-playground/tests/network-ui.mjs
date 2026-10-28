@@ -258,7 +258,9 @@ try {
 
   // Extensions: custom harness capabilities turn on and off per agent and apply from the next request.
   await tab("Extend");
-  await expect(page.locator(".ext-card")).toHaveCount(2);
+  await expect(page.locator(".ext-card")).toHaveCount(3);
+  // New sessions start with the toolkit on.
+  await expect(page.getByRole("switch", { name: "Toolkit" })).toHaveAttribute("aria-checked", "true");
   const jevSwitch = page.getByRole("switch", { name: "Jev damage control" });
   await expect(jevSwitch).toHaveAttribute("aria-checked", "false");
   await jevSwitch.click();
@@ -310,7 +312,14 @@ try {
   // Durable jobs: the list in Tasks, run cards in the chat with named phases and their steps, stop, an approval that
   // survives a reload, a run the agent starts with its tool, the task tree, stop all and runtime details.
   await tab("Tasks");
-  await expect(page.locator(".job-def")).toHaveCount(3);
+  await expect(page.locator(".job-def")).toHaveCount(8);
+  await expect(page.getByRole("textbox", { name: "Workspace snapshot path" })).toHaveValue(".");
+  // A job with a required prompt cannot start until it has one; the typed value is what the run gets.
+  const planBuild = page.getByRole("button", { name: "Run Plan and build" });
+  await expect(planBuild).toBeDisabled();
+  await page.getByRole("textbox", { name: "Plan and build prompt" }).fill("add a README");
+  await expect(planBuild).toBeEnabled();
+  await expect(page.locator('.job-def[data-job="plan-build-review-fix"] .tag').last()).toHaveText("~20 min");
   await page.getByRole("button", { name: "Run Workspace snapshot" }).click();
   const snapshot = chat().locator(".job-run").filter({ hasText: "Workspace snapshot" }).first();
   await expect(snapshot).toContainText("Completed", { timeout: 20000 });
