@@ -5,9 +5,12 @@ import Quickshell.Hyprland
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
+import "Agui.js" as Agui
 
-// Bar icon for the Durable Pi hub. It polls the hub's GET /api/network (no token: the hub keeps them) and colors
-// itself by what it finds. Left click opens the hub web UI as a web app, right click the status panel.
+// Bar icon for the Durable Pi hub. It follows the hub's read-only AG-UI stream (GET /api/agui) and
+// falls back to polling GET /api/network while the stream is down (neither needs a token: the hub
+// keeps them), then colors itself by what it finds. Left click opens the hub web UI as a web app,
+// right click the status panel with its list and live canvas.
 BarWidget {
   id: root
   moduleName: "n4s5ti.durable-pi"
@@ -31,6 +34,8 @@ BarWidget {
     return n + d.sessions.filter(function(s) { return s.busy }).length
   }, 0)
   readonly property bool deviceTrouble: network.ok && onlineCount < devices.length
+  readonly property var canvasState: agui.canvas
+  readonly property bool canvasLive: agui.live
 
   readonly property color indicatorColor: !network.ok
     ? (bar ? bar.barForeground : Commons.Color.foreground)
@@ -84,6 +89,7 @@ BarWidget {
     request.timeout = 2000
     request.onreadystatechange = function() {
       if (request.readyState !== XMLHttpRequest.DONE) return
+      if (agui.live) return
       var next = { ok: false, loaded: true, devices: [] }
       if (request.status >= 200 && request.status < 300 && request.responseText.length <= maxResponse) {
         try {
@@ -116,6 +122,7 @@ BarWidget {
     var items = bar && typeof bar.moduleWidgets === "function" ? bar.moduleWidgets(moduleName) : [root]
     return JSON.stringify({
       hubOk: network.ok,
+      streamLive: agui.live,
       devices: devices.length,
       sessions: sessionCount,
       busy: busyCount,
@@ -149,11 +156,22 @@ BarWidget {
 
   onBarChanged: injectPanel()
 
+  readonly property bool barVisible: root.Window.window ? root.Window.window.visible : false
+
+  AguiStream {
+    id: agui
+    hubUrl: root.hubUrl
+    enabled: root.barVisible
+    onCanvasChanged: if (live) root.network = Agui.toNetwork(canvas)
+    onLiveChanged: if (live) root.network = Agui.toNetwork(canvas)
+  }
+
+  // Fallback while the stream is down (an older hub, or the hub restarting).
   Timer {
     interval: Math.max(2, Number(root.setting("pollSeconds", "5")) || 5) * 1000
     repeat: true
     triggeredOnStart: true
-    running: root.Window.window ? root.Window.window.visible : false
+    running: root.barVisible && !agui.live
     onTriggered: root.refresh()
   }
 
