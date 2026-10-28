@@ -4,6 +4,9 @@
 //
 //   system-prompts       a checklist of built-in system prompts, rendered as one section
 //   jev-damage-control   Jev judges every bash command before it runs and blocks destructive ones
+//
+// A hook runs outside the commit line and can run again after a crash. A hook that asks a person or an outside API
+// must store the answer with `api.memo`, as the Jev guard does. A `safe` tool rerun after a crash skips `beforeTool`.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { defineDoc, defineExtension, hook, section, ToolTask, type Extension } from "@earendil-works/pi-durable";
@@ -123,8 +126,10 @@ export function createAddons(opts: { offline: boolean }) {
           if (!verdict) {
             try {
               verdict = await api.memo<Verdict>("jev-damage-control", await judge(command), ctx);
-            } catch {
-              return; // Fails open: a Jev outage must not stop bash.
+            } catch (e) {
+              // Fails open: a Jev outage must not stop bash. The log line is the only record that the guard was skipped.
+              console.error("[jev-damage-control] unjudged, ran anyway:", command, "-", e instanceof Error ? e.message : e);
+              return;
             }
           }
           if (verdict.block) return { block: `jev-damage-control blocked this command: ${verdict.reason}` };

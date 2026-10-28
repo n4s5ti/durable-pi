@@ -92,6 +92,8 @@ export function v1(store: Store) {
     route(async (req, res) => res.json(await store.abortTask(store.harness(L(res).row), int(req.params.taskId, "taskId")))),
   );
   r.get("/sessions/:s/inspect", route(async (_req, res) => res.json(await store.inspect(store.harness(L(res).row)))));
+  r.get("/sessions/:s/stuck", route(async (_req, res) => res.json(await store.stuck(store.harness(L(res).row)))));
+  r.post("/sessions/:s/backup", route(async (_req, res) => res.json(await store.backup(L(res).row))));
   r.get(
     "/sessions/:s/submissions/:id",
     route(async (req, res) => {
