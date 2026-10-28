@@ -1,5 +1,5 @@
 // read_sqlite, read_archive, read_document, web_search, fetch_url and github, through a live session against local
-// fixtures. OMP_LIVE=1 adds real GitHub (gh's login) and DuckDuckGo calls.
+// fixtures. TOOLKIT_LIVE=1 adds real GitHub (gh's login) and DuckDuckGo calls.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -8,10 +8,10 @@ import { once } from "node:events";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { githubArgv } from "../src/omp-github.js";
-import { htmlToMarkdown } from "../src/omp-common.js";
-import { notebookText, xlsxText, xmlText } from "../src/omp-read.js";
-import { formatResults, parseDuckDuckGo } from "../src/omp-web.js";
+import { githubArgv } from "../src/toolkit-github.js";
+import { htmlToMarkdown } from "../src/toolkit-common.js";
+import { notebookText, xlsxText, xmlText } from "../src/toolkit-read.js";
+import { formatResults, parseDuckDuckGo } from "../src/toolkit-web.js";
 import { faux, tempStore } from "./helpers.js";
 
 const has = (bin: string) => {
@@ -22,7 +22,7 @@ const has = (bin: string) => {
     return false;
   }
 };
-const live = process.env.OMP_LIVE === "1";
+const live = process.env.TOOLKIT_LIVE === "1";
 
 test("document XML, sheets, notebooks and HTML turn into readable text", () => {
   assert.equal(xmlText('<w:p><w:r><w:t>Hello</w:t></w:r><w:tab/><w:r><w:t>A &amp; B</w:t></w:r></w:p><w:p><w:t>Two</w:t></w:p>'), "Hello\tA & B\nTwo");
@@ -75,7 +75,7 @@ trailer<</Root 1 0 R>>
 %%EOF
 `;
 
-test("tier 2 tools run in a live session", { skip: !has("bsdtar") }, async () => {
+test("file, web and GitHub tools run in a live session", { skip: !has("bsdtar") }, async () => {
   const t = await tempStore();
   const server = createServer((req, res) => {
     if (req.url?.startsWith("/search")) {
@@ -120,11 +120,11 @@ test("tier 2 tools run in a live session", { skip: !has("bsdtar") }, async () =>
 
   const store = await t.open();
   try {
-    const s = await store.create({ name: "Tier2", cwd: t.work, model: faux });
+    const s = await store.create({ name: "FilesWeb", cwd: t.work, model: faux });
     const { h, c } = await store.resolveAgent(s.id, "main");
     let n = 0;
     const call = async (name: string, args: unknown) => {
-      const sub = await store.send(c, { content: `tool: ${name} ${JSON.stringify(args)}`, requestId: `t2-${n++}` });
+      const sub = await store.send(c, { content: `tool: ${name} ${JSON.stringify(args)}`, requestId: `fw-${n++}` });
       assert.equal((await store.settled(h, sub.id as number, 30000)).status, "done");
       const md = (await store.transcript(c, "markdown")).text ?? "";
       return md.slice(md.lastIndexOf("Tool finished:"));

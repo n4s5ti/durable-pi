@@ -1,4 +1,4 @@
-// Helpers shared by the tools ported from Oh My Pi (see omp-tools.ts).
+// Helpers shared by the toolkit add-on's tools (see toolkit.ts).
 import type { ToolExecutionApi } from "@earendil-works/pi-durable";
 import type { Context } from "@earendil-works/chord";
 
@@ -46,7 +46,7 @@ export function decodeEntities(value: string) {
     .replace(/&([a-z]+|#39);/gi, (all, name: string) => ENTITIES[name.toLowerCase()] ?? all);
 }
 
-/** Tag-free text of an HTML fragment, whitespace collapsed (Oh My Pi's decodeHtmlText). */
+/** Tag-free text of an HTML fragment, whitespace collapsed. */
 export function htmlText(value: string) {
   return decodeEntities(value.replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ").trim();
 }

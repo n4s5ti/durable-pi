@@ -1,6 +1,19 @@
-// Tools ported from Oh My Pi (https://github.com/can1357/oh-my-pi, MIT: (c) 2025 Mario Zechner, (c) 2025-2026 Can
-// Bölük, (c) 2026 Stencil Labs, Inc.). Oh My Pi backs its search tools with Rust natives; these shell out to the CLIs
-// (rg, ast-grep) through the call's execution environment, so they search the session's folder on its own device.
+// The toolkit add-on: search, a task list, documents, the web and GitHub for Durable Pi agents. The search tools shell
+// out to rg and ast-grep through the call's execution environment, so they search the session's folder on its device.
+//
+// License notice: parts of these tools (descriptions, the todo rules, path lists, the DuckDuckGo parser, the GitHub
+// ops) are adapted from Oh My Pi, https://github.com/can1357/oh-my-pi, under the MIT License:
+//   Copyright (c) 2025 Mario Zechner; Copyright (c) 2025-2026 Can Bölük; Copyright (c) 2026 Stencil Labs, Inc.
+//   Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+//   documentation files (the "Software"), to deal in the Software without restriction, including without limitation
+//   the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and
+//   to permit persons to whom the Software is furnished to do so, subject to the following conditions: The above
+//   copyright notice and this permission notice shall be included in all copies or substantial portions of the
+//   Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+//   LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+//   SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+//   OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+//   DEALINGS IN THE SOFTWARE.
 //
 //   think     a scratchpad: the model writes its reasoning down, nothing runs
 //   grep      text and regex search (ripgrep)
@@ -10,20 +23,20 @@
 //
 // and, in their own files:
 //
-//   read_sqlite, read_archive, read_document   omp-read.ts: what Oh My Pi's read does beyond text files
-//   web_search, fetch_url                      omp-web.ts: search providers and pages as Markdown
-//   github                                     omp-github.ts: read-only GitHub through the gh CLI
+//   read_sqlite, read_archive, read_document   toolkit-read.ts: files beyond plain text
+//   web_search, fetch_url                      toolkit-web.ts: search providers and pages as Markdown
+//   github                                     toolkit-github.ts: read-only GitHub through the gh CLI
 import { Type } from "@earendil-works/pi-ai";
 import { defineDoc, defineExtension, defineTool, section } from "@earendil-works/pi-durable";
-import { run, text } from "./omp-common.js";
-import { GITHUB_TOOLS } from "./omp-github.js";
-import { READ_TOOLS } from "./omp-read.js";
-import { WEB_TOOLS } from "./omp-web.js";
+import { run, text } from "./toolkit-common.js";
+import { GITHUB_TOOLS } from "./toolkit-github.js";
+import { READ_TOOLS } from "./toolkit-read.js";
+import { WEB_TOOLS } from "./toolkit-web.js";
 
 const plain = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 /**
- * Oh My Pi's `path` list: `;`-separated paths and globs, `!glob` excludes. Bare globs match at any depth. No paths
+ * A `path` list: `;`-separated paths and globs, `!glob` excludes. Bare globs match at any depth. No paths
  * means the session's folder, left implicit so results read `src/a.ts` rather than `./src/a.ts`.
  */
 export function splitPaths(path: string | undefined) {
@@ -214,7 +227,7 @@ export type TodoArgs = {
 };
 
 const TodoList = defineDoc<{ phases: TodoPhase[] }>({
-  kind: "omp.todo",
+  kind: "toolkit.todo",
   version: 1,
   scope: "conversation",
   history: "rewindable",
@@ -224,7 +237,7 @@ const TodoList = defineDoc<{ phases: TodoPhase[] }>({
 });
 /** One per todo call, so a rerun after a crash returns the first result instead of applying the change twice. */
 const TodoReceipt = defineDoc<{ applied: boolean; result: string }>({
-  kind: "omp.todo-receipt",
+  kind: "toolkit.todo-receipt",
   version: 1,
   scope: "task",
   initial: () => ({ applied: false, result: "" }),
@@ -243,7 +256,7 @@ export function renderTodo(phases: TodoPhase[]) {
   return [...lines, `${all.filter((t) => t.status === "done").length}/${all.length} done`].join("\n");
 }
 
-/** Oh My Pi's rules after a change: with nothing active the earliest pending task starts; only one stays active. */
+/** The rules after a change: with nothing active the earliest pending task starts; only one stays active. */
 function settle(phases: TodoPhase[], started?: TodoTask) {
   const tasks = phases.flatMap((p) => p.tasks);
   const active = tasks.filter((t) => t.status === "active");
@@ -380,14 +393,14 @@ const todo = defineTool({
   },
 });
 
-export const OMP_TOOLS = [think, grep, glob, astGrep, todo, ...READ_TOOLS, ...WEB_TOOLS, ...GITHUB_TOOLS];
+export const TOOLKIT_TOOLS = [think, grep, glob, astGrep, todo, ...READ_TOOLS, ...WEB_TOOLS, ...GITHUB_TOOLS];
 
-export const OmpTools = defineExtension({
-  name: "omp-tools",
-  tools: OMP_TOOLS,
+export const Toolkit = defineExtension({
+  name: "toolkit",
+  tools: TOOLKIT_TOOLS,
   sections: [
     section(
-      "omp-tools",
+      "toolkit",
       () =>
         "Search with grep (text and regex), glob (files by name) and ast_grep (code structure) rather than grep, find or rg in bash. Track work of 3 or more steps with todo, called alongside your other tool calls, never on its own. Open SQLite files, archives and documents (PDF, Word, Excel, PowerPoint, EPUB) with read_sqlite, read_archive and read_document. Use web_search to find things online and fetch_url to read a page; use github for repositories, issues, pull requests, CI runs and files on GitHub.",
       { tag: false },
