@@ -61,8 +61,19 @@ A durable job is a repeatable workflow with named phases. Each run is one pi-dur
 | Job | Phases | Inputs |
 |---|---|---|
 | `workspace-snapshot` | scan → measure → save → verify | `path` |
-| `release-check` | plan → gather (subagent with read and bash) → approve (waits for a person) → publish → verify | `commits` |
+| `release-check` | plan → gather (read-only subagent) → approve (waits for a person) → publish → verify | `commits` |
 | `change-watch` | baseline → watch (one checkpoint per check) → report | `path`, `checks`, `interval_seconds` |
+| `plan-build` | plan (writes `specs/*.md`) → build | `prompt`, `model` |
+| `plan-build-review` | plan → build → review (read-only, PASS or FAIL with issues) | `prompt`, `model`, `review_model` |
+| `plan-build-review-fix` | plan → build → review and fix (repeats: fix the blockers, review again, up to `max_rounds` reviews) | `prompt`, `model`, `review_model`, `max_rounds` |
+| `chore-implement` | plan the chore (`specs/chore-*.md`) → implement | `prompt`, `model` |
+| `expert-plan-build-improve` | expert plan (reads `.claude/commands/experts/<expert>/expertise.yaml`) → build → improve the expertise (under 1000 lines) | `prompt`, `expert`, `model` |
+
+The last five are AI developer workflows: a plan → build → review → fix family, a chore runner, and an expert that keeps its own expertise file up to date. None of them commits.
+
+A phase's subagent runs in a fresh child conversation the run owns, one per call and retry, so a restart finds the same child and its request instead of asking again. Each call picks a tool set: `read` (`read`, `bash` and the toolkit's read-only tools) or `code` (adds `write` and `edit`), and a model by device model id; `auto` (the default) keeps the model of the agent that started the run, and an unknown id fails the run with the ids to choose from. Phases that need a result ask for a JSON block at the end of the answer and check it; a missing or invalid block is asked for again in the same conversation, twice at most. Prompts come from the session folder's `.claude/commands/<name>.md` when it has one (`plan`, `build`, `review`, `fix`, `chore`, `implement`, `experts/<expert>/plan`, `experts/<expert>/self-improve`; `$ARGUMENTS` and `$1`…`$9` are filled in, front matter dropped), otherwise from the job's built-in prompt. A command must be a whole prompt: subagents run tools, not other slash commands.
+
+Inputs are validated when the run starts: integers within their range, and strings non-empty. A string input whose default is empty (`prompt`, `expert`) is required; the Tasks tab keeps the run button off until it is filled.
 
 Agents use the playground tools: `list_durable_jobs` (ids, phases, inputs, approval, result path and recent runs with their task ids), `run_durable_job {job, input?, wait?}` and `check_durable_job {task_id? | job?}` (one run's phases, steps and result, a job's latest run, or recent runs). A run starts in the background, owned by the conversation; with `wait: true` the call owns it and waits, so an interrupt stops it. The same extension adds `search_history {query?, tool?, entry?, kind?, from_entry?, to_entry?, order?, limit?, offset?}`, which pages through the agent's whole stored history including entries before a reset or compaction, and `ping_on_call_engineer {summary, severity?}`, a simulated pager (no external call) that is not replay-safe and works once per agent.
 

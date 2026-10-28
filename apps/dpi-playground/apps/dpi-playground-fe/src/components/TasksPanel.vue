@@ -16,7 +16,20 @@ import type { TaskNode, TaskOutcome } from "@sdk/api";
 import { jobRunDone } from "@sdk/jobs";
 import { message } from "../client/hub";
 import { agentHandle, sessionHandle, tasks } from "../client/store";
-import { decide, jobDef, jobDefs, jobRuns, openAgent, pending, revealRun, startJob } from "../client/jobs";
+import {
+  decide,
+  inputValue,
+  jobDef,
+  jobDefs,
+  jobRuns,
+  missingInputs,
+  openAgent,
+  pending,
+  revealRun,
+  setInput,
+  startJob,
+  typicalTime,
+} from "../client/jobs";
 
 const error = ref("");
 const stopping = ref(false);
@@ -123,9 +136,11 @@ const outcomes = computed(() =>
     <section class="task-section" aria-label="Durable jobs">
       <h3><Repeat :size="18" />Durable jobs</h3>
       <p class="hint">
-        Repeatable workflows with named phases. Every run follows the same phases and saves a checkpoint after each one.
-        Start one here, or ask your agent: it finds these with <code>list_durable_jobs</code>, starts them with
-        <code>run_durable_job</code> and checks them with <code>check_durable_job</code>. Runs play out live in the chat.
+        Repeatable workflows with named phases. Every run follows the same phases and saves a checkpoint after each one,
+        so a restart resumes the phase it was in. A phase can hand its work to a subagent, each in a fresh conversation
+        with its own tools and model. Fill in the inputs and start one here, or ask your agent: it finds these with
+        <code>list_durable_jobs</code>, starts them with <code>run_durable_job</code> and checks them with
+        <code>check_durable_job</code>. Runs play out live in the chat.
       </p>
       <p v-if="!jobDefs.length" class="task-empty">This device has no durable jobs. Deploy the latest backend to it.</p>
       <article v-for="def in jobDefs" :key="def.id" class="job-def" :data-job="def.id">
@@ -133,7 +148,7 @@ const outcomes = computed(() =>
           <Workflow :size="18" />
           <strong>{{ def.title }}</strong>
           <span v-if="def.approval" class="tag">needs approval</span>
-          <span class="tag">~{{ def.seconds }}s</span>
+          <span class="tag">{{ typicalTime(def.seconds) }}</span>
         </div>
         <p>{{ def.summary }}</p>
         <ol class="job-chain" :aria-label="`${def.title} phases`">
@@ -144,8 +159,30 @@ const outcomes = computed(() =>
             />
           </li>
         </ol>
+        <div v-if="def.inputs.length" class="job-def-inputs">
+          <label v-for="input in def.inputs" :key="input.name" :class="{ wide: input.name === 'prompt' }">
+            <span :title="input.description">{{ input.name }}</span>
+            <textarea
+              v-if="input.name === 'prompt'"
+              rows="2"
+              :aria-label="`${def.title} ${input.name}`"
+              :placeholder="input.description"
+              :value="inputValue(def, input.name)"
+              @input="setInput(def, input.name, ($event.target as HTMLTextAreaElement).value)"
+            />
+            <input
+              v-else
+              :type="input.type === 'integer' ? 'number' : 'text'"
+              :min="input.min"
+              :max="input.max"
+              :aria-label="`${def.title} ${input.name}`"
+              :placeholder="input.description"
+              :value="inputValue(def, input.name)"
+              @input="setInput(def, input.name, ($event.target as HTMLInputElement).value)"
+            />
+          </label>
+        </div>
         <div class="job-def-meta">
-          <code v-for="input in def.inputs" :key="input.name" :title="input.description">{{ input.name }}={{ input.default }}</code>
           <code :title="`Each run saves its result to App State ${def.resultPath}`">→ {{ def.resultPath }}</code>
         </div>
         <div v-if="latest.get(def.id)" class="job-def-last">
@@ -162,7 +199,12 @@ const outcomes = computed(() =>
             <button class="secondary" :disabled="!!pending" @click="decide(latest.get(def.id)!, false)">Decline</button>
           </template>
         </div>
-        <button class="secondary job-def-run" :disabled="!!pending || !agentHandle" @click="startJob(def)">
+        <button
+          class="secondary job-def-run"
+          :disabled="!!pending || !agentHandle || missingInputs(def).length > 0"
+          :title="missingInputs(def).length ? `Fill in ${missingInputs(def).join(' and ')} first` : undefined"
+          @click="startJob(def)"
+        >
           <Play :size="16" />Run {{ def.title }}
         </button>
       </article>

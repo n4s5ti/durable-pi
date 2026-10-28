@@ -1,6 +1,6 @@
 // Durable jobs in the web client: the device's job definitions, this agent's runs (the `demo.job-runs`
 // document), and the actions a run card or the Tasks tab can take.
-import { computed, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import { JOB_RUNS_DOC, type JobDef, type JobRun, type JobRunsDoc } from "@sdk/jobs";
 import {
   agentHandle,
@@ -55,9 +55,23 @@ export function revealRun(id: number) {
   );
 }
 
+/** What the Tasks tab's fields hold for each job, by input name; an untouched field is its default. */
+export const jobInputs = reactive<Record<string, Record<string, string>>>({});
+export const inputValue = (def: JobDef, name: string) =>
+  jobInputs[def.id]?.[name] ?? String(def.inputs.find((i) => i.name === name)?.default ?? "");
+export const setInput = (def: JobDef, name: string, value: string) => ((jobInputs[def.id] ??= {})[name] = value);
+/** Text inputs a run cannot start without: an empty default means the job needs a value. */
+export const missingInputs = (def: JobDef) =>
+  def.inputs.filter((i) => i.type === "string" && i.default === "" && !inputValue(def, i.name).trim()).map((i) => i.name);
+/** A job's typical run time, in seconds or minutes. */
+export const typicalTime = (s: number) => (s < 90 ? `~${s}s` : `~${Math.round(s / 60)} min`);
+
 export async function startJob(def: JobDef) {
+  const input = Object.fromEntries(
+    def.inputs.map((i) => [i.name, i.type === "integer" ? Number(inputValue(def, i.name)) : inputValue(def, i.name)]),
+  );
   const started = await act(`start:${def.id}`, () =>
-    agentHandle.value!.demo<{ taskId: number }>("jobs", { job: def.id }),
+    agentHandle.value!.demo<{ taskId: number }>("jobs", { job: def.id, input }),
   );
   if (started) {
     notify(`${def.title} started. It runs in the chat.`);

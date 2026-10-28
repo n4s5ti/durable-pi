@@ -148,7 +148,7 @@ Every agent and session on a device shares one JSON document through the `read_s
   <img src="images/11_durable_jobs_wait.svg" alt="The release-check job checkpoints plan and gather, waits for a person at approve, then publishes, verifies and finishes" width="780">
 </p>
 
-A durable job is a repeatable workflow with named phases, and every phase is a checkpoint, so a restart resumes the current phase. Run one from the Tasks tab, or let the agent call `run_durable_job` and follow it with `check_durable_job`. Three ship as examples: `workspace-snapshot`, `change-watch` and `release-check`, where a subagent gathers the evidence and the job waits for a person before it publishes. You are not stuck in the loop and not out of it. **You are near the loop**, and you step in when a job asks for you.
+A durable job is a repeatable workflow with named phases, and every phase is a checkpoint, so a restart resumes the current phase. Run one from the Tasks tab, or let the agent call `run_durable_job` and follow it with `check_durable_job`. Eight ship. Three are examples: `workspace-snapshot`, `change-watch` and `release-check`, where a subagent gathers the evidence and the job waits for a person before it publishes. Five are AI developer workflows: `plan-build`, `plan-build-review`, `plan-build-review-fix`, `chore-implement` and `expert-plan-build-improve`. Their phases hand the work to subagents, each in a fresh conversation with its own tools and model, and take a prompt you type in the Tasks tab or the agent passes in. See [`apps/dpi-backend/API.md`](apps/dpi-backend/API.md#durable-jobs). You are not stuck in the loop and not out of it. **You are near the loop**, and you step in when a job asks for you.
 
 ### Change the tools mid-run
 

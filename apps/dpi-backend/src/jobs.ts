@@ -2,7 +2,7 @@
 //
 // Each job is one pi-durable task definition whose checkpoint phases are the job's named phases, so the task graph,
 // the run record and the chat card all name the same phase. A phase does real work (shell commands in the session's
-// folder, a subagent with read and bash, App State writes), records every step in the conversation document
+// folder, subagents with their own tools and model, App State writes), records every step in the conversation document
 // `demo.job-runs`, then commits the next checkpoint. A restart resumes the unfinished phase from its checkpoint.
 import type { Context, JsonValue } from "@earendil-works/chord";
 import {
@@ -15,7 +15,7 @@ import {
   type TaskRuntime,
   type Tx,
 } from "@earendil-works/pi-durable";
-import { CodingTools, createBashTool, createReadTool } from "@earendil-works/pi-durable/tools";
+import { CodingTools, createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import { readState } from "../../dpi-sdk/src/app-state.js";
 import type { WireAssistantMessage, WireMessage, WireToolResultMessage } from "../../dpi-sdk/src/api.js";
 import { messageText } from "../../dpi-sdk/src/transcript.js";
@@ -30,6 +30,8 @@ import {
   type JobStepKind,
 } from "../../dpi-sdk/src/jobs.js";
 import type { SharedState } from "./shared-state.js";
+import { Toolkit, TOOLKIT_TOOLS } from "./toolkit.js";
+import { ADW_HANDLERS, ADW_JOB_DEFS } from "./adw-jobs.js";
 
 export const JobRuns = defineDoc<JobRunsDoc>({
   kind: JOB_RUNS_DOC,
@@ -53,8 +55,17 @@ const StepValues = defineDoc<{ values: Record<string, { v: JsonValue; kind: JobS
   checkpointWhen: () => false,
 });
 
-type Values = Record<string, JobInputValue>;
-type Data = Record<string, JsonValue>;
+/** Each subagent call's child conversation by call key, so a resumed phase talks to the same child. */
+const JobChildren = defineDoc<{ children: Record<string, number> }>({
+  kind: "demo.job-children",
+  version: 1,
+  scope: "task",
+  initial: () => ({ children: {} }),
+  checkpointWhen: () => false,
+});
+
+export type Values = Record<string, JobInputValue>;
+export type Data = Record<string, JsonValue>;
 type JobInput = { job: string; input: Values };
 /** `paced`: this phase already took its PACE_MS pause, so waking from that sleep enters the phase. */
 type Checkpoint = { phase: string; iteration: number; data: Data; approvalTask?: number; paced?: boolean };
@@ -117,7 +128,7 @@ export const JOB_DEFS: JobDef[] = [
     id: "release-check",
     title: "Release check",
     summary:
-      "Plan a release review, let a subagent gather facts with read and bash, wait for your approval, then publish the notes to App State and verify them.",
+      "Plan a release review, let a read-only subagent gather facts, wait for your approval, then publish the notes to App State and verify them.",
     phases: [
       { id: "plan", label: "Plan", summary: "Decide what the release notes must cover" },
       { id: "gather", label: "Gather", summary: "A subagent runs git and reads the README" },
@@ -151,6 +162,7 @@ export const JOB_DEFS: JobDef[] = [
     resultPath: `/${RESULT_ROOT}/change-watch`,
     seconds: 25,
   },
+  ...ADW_JOB_DEFS,
 ];
 
 export const jobDef = (id: string) => JOB_DEFS.find((d) => d.id === id);
@@ -181,7 +193,17 @@ export function resolveJobInput(def: JobDef, raw: unknown): Values {
 
 // ------------------------------------------------------------------ the phase API job handlers use
 
-interface Phase {
+/** How a phase's subagent works. Each call gets a fresh child conversation. */
+export type AgentOptions = {
+  /** `read` (default): read, bash and the toolkit's read-only tools. `code` adds write and edit. */
+  tools?: "read" | "code";
+  /** A device model id; empty or `auto` uses the model of the agent that owns the run. */
+  model?: string;
+  /** The child's instructions; the default suits the tool set. */
+  instructions?: string;
+};
+
+export interface Phase {
   readonly input: Values;
   readonly data: Data;
   readonly iteration: number;
@@ -196,13 +218,46 @@ interface Phase {
   progress(done: number, total: number): Promise<void>;
   saveState(path: string, value: JsonValue): Promise<void>;
   readState(path: string): Promise<JsonValue | undefined>;
-  /** Run a subagent with read and bash in an owned child conversation; its tool calls become steps. */
-  agent(prompt: string): Promise<string>;
+  /** Run a subagent in a fresh child conversation the run owns; its tool calls become steps. Returns its answer. */
+  agent(prompt: string, opts?: AgentOptions): Promise<string>;
+  /**
+   * Like `agent`, but the answer must end with a JSON block shaped like `shape`. `check` returns a problem or nothing;
+   * a missing, broken or rejected block is asked for again in the same conversation, twice at most.
+   */
+  agentJson<T>(prompt: string, shape: string, check: (value: unknown) => string | undefined, opts?: AgentOptions): Promise<T>;
+  /**
+   * A prompt from the session folder's `.claude/commands/<name>.md` when it has one, else `fallback`, with front
+   * matter removed and `$ARGUMENTS`, `$1`…`$9` filled from `args`.
+   */
+  template(name: string, args: string[], fallback: string): Promise<string>;
 }
 
 /** `sleep`: end the phase asleep until that Harness time, then rerun it from the same checkpoint (a durable wait). */
-type Outcome = { done: string; data?: Data } | { again: Data; summary?: string } | { sleep: number };
-type Handler = (p: Phase) => Promise<Outcome>;
+export type Outcome = { done: string; data?: Data } | { again: Data; summary?: string } | { sleep: number };
+export type Handler = (p: Phase) => Promise<Outcome>;
+
+/** Front matter removed; `$ARGUMENTS` is every argument, `$1`…`$9` one each. */
+export function fillTemplate(body: string, args: string[]) {
+  return body
+    .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "")
+    .replaceAll("$ARGUMENTS", args.join(" "))
+    .replace(/\$([1-9])/g, (_, n: string) => args[Number(n) - 1] ?? "")
+    .trim();
+}
+
+/** The last JSON block of a reply: a ```json fence, any fence, or the text from the last line that opens an object. */
+export function lastJson(text: string): { value: unknown } | { error: string } {
+  const fences = [...text.matchAll(/```(?:json)?[ \t]*\r?\n([\s\S]*?)```/g)];
+  const candidates = fences.length ? [fences.at(-1)![1]] : [];
+  const brace = text.lastIndexOf("\n{");
+  candidates.push(brace >= 0 ? text.slice(brace + 1) : text.slice(Math.max(0, text.indexOf("{"))));
+  for (const c of candidates) {
+    try {
+      return { value: JSON.parse(c.trim()) };
+    } catch {}
+  }
+  return { error: fences.length ? "the JSON block does not parse" : "there is no JSON block" };
+}
 
 const inDir = (dir: string, command: string) => (dir === "." ? command : `cd ${q(dir)} && ${command}`);
 const label = (dir: string, command: string) => (dir === "." ? command : `${command}  (in ${dir})`);
@@ -353,6 +408,7 @@ const HANDLERS: Record<string, Record<string, Handler>> = {
       return { done: changes.length ? `${changes.length} changes saved to App State` : "No changes. Report saved to App State" };
     },
   },
+  ...ADW_HANDLERS,
 };
 
 function checksums(out: string) {
@@ -402,10 +458,23 @@ function endRun(run: JobRun, index: number, status: "failed" | "aborted", runSta
 export interface JobsDeps {
   shared: SharedState;
   sessionId: string;
+  /** A device model by id, for a subagent's `model` option. Throws for an unknown id. */
+  resolveModel?: (id: string) => { provider: string; modelId: string };
 }
 
 const CHILD_INSTRUCTIONS =
   "You are one phase of a durable job. Use only the commands and files the task names. Never edit or write files. Answer in at most 5 short lines.";
+const CODE_INSTRUCTIONS =
+  "You are one phase of a durable job, working in the session's folder. Do the whole task: read what you need, change files with write and edit, and run the checks the task names. Do not commit or push unless the task says so. End with a short report.";
+
+const AGENT_TOOLS = {
+  read: { tools: () => [createReadTool(), createBashTool(), ...TOOLKIT_TOOLS], instructions: CHILD_INSTRUCTIONS, detail: "read, bash and search" },
+  code: {
+    tools: () => [createReadTool(), createWriteTool(), createEditTool(), createBashTool(), ...TOOLKIT_TOOLS],
+    instructions: CODE_INSTRUCTIONS,
+    detail: "read, write, edit, bash and search",
+  },
+};
 
 export function createJobs(deps: JobsDeps) {
   const Approval = defineTask<{ runId: number }, { phase: "wait" }, { approved: boolean }>({
@@ -438,6 +507,7 @@ export function createJobs(deps: JobsDeps) {
     const spec = def.phases[index];
     const cp = task.state.checkpoint;
     let counter = 0;
+    let agents = 0;
     const record = (fn: (run: JobRun, phase: JobPhaseRun) => void) =>
       runtime.commit(async (tx) => {
         const current = await runOf(tx, task);
@@ -518,42 +588,89 @@ export function createJobs(deps: JobsDeps) {
           return undefined;
         }
       },
-      agent: async (prompt) => {
-        let childId = 0;
-        const stepId = `${spec.id}:${cp.iteration}:agent`;
-        const at = runtime.now();
-        await runtime.commit(async (tx) => {
-          const found = (await tx.scanConversations({ ownerTaskId: task.id }, 1)).items[0];
-          if (found) childId = found.id as number;
-          else {
-            const child = await tx.createConversation({ ownership: { kind: "task", taskId: task.id } });
-            await configure(tx, child.id, {
-              extensions: [CodingTools],
-              tools: [createReadTool(), createBashTool()],
-              instructions: CHILD_INSTRUCTIONS,
-            });
-            childId = child.id as number;
-          }
-          const current = await runOf(tx, task);
-          current.childConversationId = childId;
-          upsertStep(current.phases[index], {
-            id: stepId,
-            kind: "agent",
-            label: `Subagent #${childId}`,
-            detail: "Working with read and bash",
-            status: "running",
-            iteration: cp.iteration,
-            at,
-            conversationId: childId,
+      agent: async (prompt, opts = {}) => {
+        const key = `${spec.id}:${cp.iteration}:agent${agents++}`;
+        const childId = await child(key, opts);
+        return converse(childId, key, prompt, opts);
+      },
+      agentJson: async <T,>(prompt: string, shape: string, check: (value: unknown) => string | undefined, opts: AgentOptions = {}) => {
+        const key = `${spec.id}:${cp.iteration}:agent${agents++}`;
+        const childId = await child(key, opts);
+        let text = await converse(childId, key, `${prompt}\n\nWhen you are done, end your reply with one \`\`\`json block shaped like:\n${shape}`, opts);
+        for (let attempt = 1; ; attempt++) {
+          const parsed = lastJson(text);
+          const problem = "error" in parsed ? parsed.error : check(parsed.value);
+          if (!problem) return (parsed as { value: unknown }).value as T;
+          if (attempt > 2) throw Error(`Subagent #${childId} gave no usable JSON: ${problem}`);
+          text = await converse(
+            childId,
+            `${key}:retry${attempt}`,
+            `Your reply did not end with the JSON block this step needs (${problem}). Reply with only that block, shaped like:\n${shape}`,
+            opts,
+          );
+        }
+      },
+      template: async (name, args, fallback) => {
+        const env = await runtime.env(ctx);
+        const path = env ? await env.absolutePath(`.claude/commands/${name}.md`, ctx) : undefined;
+        const own = env && path?.ok ? await env.readTextFile(path.value, ctx) : undefined;
+        if (own?.ok) await step("note", `Prompt from .claude/commands/${name}.md`, async () => ({ value: undefined }));
+        return fillTemplate(own?.ok ? own.value : fallback, args);
+      },
+    };
+
+    /** The child conversation for one subagent call: created and configured once, found again after a restart. */
+    async function child(key: string, opts: AgentOptions) {
+      const profile = AGENT_TOOLS[opts.tools ?? "read"];
+      // A task-owned conversation starts as a copy of the run's agent, model included; a phase may pick another.
+      let model: { provider: string; modelId: string } | undefined;
+      if (opts.model && opts.model !== "auto") {
+        if (!deps.resolveModel) throw Error(`This device cannot pick model ${opts.model} for a job`);
+        model = deps.resolveModel(opts.model);
+      }
+      let id = 0;
+      await runtime.commit(async (tx) => {
+        const children = await tx.doc(JobChildren, task.id);
+        const known = children.children[key];
+        if (known !== undefined) id = known;
+        else {
+          const created = await tx.createConversation({ ownership: { kind: "task", taskId: task.id } });
+          await configure(tx, created.id, {
+            extensions: [CodingTools, Toolkit],
+            tools: profile.tools(),
+            instructions: opts.instructions ?? profile.instructions,
+            ...(model ? { model } : {}),
           });
-          return undefined;
-        }, ctx);
+          id = created.id as number;
+          children.children[key] = id;
+        }
+        (await runOf(tx, task)).childConversationId = id;
+        return undefined;
+      }, ctx);
+      return id;
+    }
+
+    /** Send one message to a child and wait for its answer, mirroring its tool calls into the run record. */
+    async function converse(childId: number, stepId: string, prompt: string, opts: AgentOptions) {
+      const at = runtime.now();
+      const working = `Working with ${AGENT_TOOLS[opts.tools ?? "read"].detail}${opts.model && opts.model !== "auto" ? ` on ${opts.model}` : ""}`;
+      await record((_r, phase) =>
+        upsertStep(phase, {
+          id: stepId,
+          kind: "agent",
+          label: `Subagent #${childId}`,
+          detail: working,
+          status: "running",
+          iteration: cp.iteration,
+          at,
+          conversationId: childId,
+        }),
+      );
+      {
         const handle = await runtime.conversation(childId as ConversationId, ctx);
         if (!handle) throw Error(`Subagent #${childId} is missing`);
-        const submission = await handle.submit(
-          { type: "input", content: prompt, requestId: `job:${task.id}:${spec.id}` },
-          ctx,
-        );
+        // One request id per call and retry: a resumed phase finds its submission instead of sending it again.
+        const submission = await handle.submit({ type: "input", content: prompt, requestId: `job:${task.id}:${stepId}` }, ctx);
         const settled = submission.wait(ctx);
         // Mirror the subagent's tool calls into the run record while it works; each call is its own pi.tool task.
         let seen = "";
@@ -627,8 +744,8 @@ export function createJobs(deps: JobsDeps) {
         );
         if (!text) throw Error(`Subagent #${childId} returned no answer (${done.status})`);
         return text;
-      },
-    };
+      }
+    }
   };
 
   /** Advance past phase `index`: the next phase's checkpoint, or the run's completed outcome. */

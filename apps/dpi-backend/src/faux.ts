@@ -9,6 +9,7 @@
 //   "page: <summary>" → one ping_on_call_engineer call
 //   "tool: <name> <args json>" → one call of any tool, e.g. tool: grep {"pattern":"TODO"}
 //   "state: <operation> <path>[ <value json>]" → one update_state call
+//   "adw-plan:" / "adw-build:" / "adw-review:" / "adw-fix:" / "adw-improve:" (job phases) → one tool call, then the step's JSON
 //   "Release check: …" (the release-check job's subagent) → one bash call
 //   anything else  → "Echo: <text>"
 import type { MutableModels } from "@earendil-works/pi-ai/models";
@@ -30,6 +31,36 @@ const textOf = (m?: AnyMessage) =>
       ? (m!.content as { type: string; text?: string }[]).map((b) => (b.type === "text" ? (b.text ?? "") : "")).join("")
       : "";
 
+/**
+ * A job phase whose prompt starts "adw-<step>:" (from test .claude/commands files): one real tool call, then the JSON
+ * the step asks for. Review passes once fixed.txt exists, which the fix step creates.
+ */
+const ADW_ACTIONS = {
+  plan: ["write", { path: "specs/faux-plan.md", content: "# Plan\n\n1. Build it\n" }],
+  build: ["bash", { command: "echo built > built.txt" }],
+  review: ["bash", { command: "test -f fixed.txt && echo PASS || echo FAIL" }],
+  fix: ["bash", { command: "touch fixed.txt" }],
+  improve: ["bash", { command: "echo 'built_txt: made by the build step' >> .claude/commands/experts/faux/expertise.yaml" }],
+} as const;
+
+function fauxAdw(step: keyof typeof ADW_ACTIONS, last: AnyMessage | undefined) {
+  if (last?.role !== "toolResult") {
+    const [tool, args] = ADW_ACTIONS[step];
+    return fauxAssistantMessage([fauxText(`Doing the ${step} step.`), fauxToolCall(tool, { ...args })], { stopReason: "toolUse" });
+  }
+  const passed = textOf(last).includes("PASS");
+  const answer = {
+    plan: { plan_path: "specs/faux-plan.md" },
+    build: { summary: "Built it", files: ["built.txt"] },
+    review: passed
+      ? { verdict: "PASS", issues: [], summary: "Matches the plan" }
+      : { verdict: "FAIL", issues: [{ severity: "blocker", description: "fixed.txt is missing" }], summary: "One blocker" },
+    fix: { summary: "Created fixed.txt" },
+    improve: { summary: "Added built.txt", changes: ["built_txt"] },
+  }[step];
+  return fauxAssistantMessage(fauxText(`Done.\n\`\`\`json\n${JSON.stringify(answer)}\n\`\`\``));
+}
+
 export function installFaux(models: MutableModels) {
   const handle = fauxProvider({
     provider: "faux",
@@ -40,6 +71,8 @@ export function installFaux(models: MutableModels) {
     handle.appendResponses([reply]);
     const messages = context.messages as unknown as AnyMessage[];
     const last = messages.at(-1);
+    const adw = /^adw-(plan|build|review|fix|improve):/.exec(textOf(messages.find((m) => m.role === "user")).trim())?.[1];
+    if (adw) return fauxAdw(adw as keyof typeof ADW_ACTIONS, last);
     if (last?.role === "toolResult")
       return fauxAssistantMessage(fauxText(`Tool finished: ${textOf(last).trim().slice(0, 400)}`));
     const prompt = textOf([...messages].reverse().find((m) => m.role === "user")).trim();
