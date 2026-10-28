@@ -12,7 +12,6 @@ import {
   Database,
   GitFork,
   Activity,
-  Workflow,
 } from "lucide-vue-next";
 import NetworkSidebar from "./components/NetworkSidebar.vue";
 import AgentView from "./components/AgentView.vue";
@@ -21,7 +20,6 @@ import OfflinePanel from "./components/OfflinePanel.vue";
 import NewSessionDialog from "./components/NewSessionDialog.vue";
 import PromptDialog from "./components/PromptDialog.vue";
 import ModelPicker from "./components/ModelPicker.vue";
-import CanvasView from "./components/CanvasView.vue";
 import {
   attempt,
   boot,
@@ -37,6 +35,9 @@ import {
   stream,
   streamState,
   treeWidth,
+  chatWidth,
+  inspectorExpanded,
+  narrow,
   ui,
   layout,
   showInspector,
@@ -101,6 +102,26 @@ function resize(e: PointerEvent) {
   window.addEventListener("pointerup", up);
 }
 
+// Drag the edge between chat (left) and inspector (right); the width persists too.
+const workspaceEl = ref<HTMLElement>();
+function resizeChat(e: PointerEvent) {
+  const start = e.clientX;
+  const width = chatWidth.value;
+  const chat = workspaceEl.value?.querySelector<HTMLElement>(".chat-panel");
+  const left = chat?.getBoundingClientRect().left ?? 0;
+  const right = workspaceEl.value?.getBoundingClientRect().right ?? window.innerWidth;
+  const max = Math.max(360, right - left - 360);
+  const move = (m: PointerEvent) =>
+    (chatWidth.value = Math.round(Math.max(360, Math.min(max, width + m.clientX - start))));
+  const up = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+}
+const chatFixed = computed(() => inspectorExpanded.value && !narrow.value);
+
 onMounted(() => {
   document.addEventListener("keydown", keydown);
   void boot();
@@ -138,15 +159,6 @@ onBeforeUnmount(() => {
           }}</span
         ><button
           class="icon-button"
-          :class="{ active: ui.canvas }"
-          title="Live canvas"
-          aria-label="Live canvas"
-          :aria-pressed="ui.canvas"
-          @click="ui.canvas = !ui.canvas"
-        >
-          <Workflow :size="19" /></button
-        ><button
-          class="icon-button"
           title="How this works"
           aria-label="How this works"
           @click="ui.dialog = { kind: 'help' }"
@@ -178,7 +190,12 @@ onBeforeUnmount(() => {
       <Info :size="18" /><span>{{ ui.error }}</span
       ><button class="icon-button" aria-label="Dismiss error" @click="ui.error = ''">×</button>
     </div>
-    <main class="net-workspace" :style="{ '--tree-w': `${treeWidth}px` }">
+    <main
+      ref="workspaceEl"
+      class="net-workspace"
+      :class="{ 'chat-fixed': chatFixed }"
+      :style="{ '--tree-w': `${treeWidth}px`, '--chat-w': `${chatWidth}px` }"
+    >
       <NetworkSidebar />
       <div
         v-if="layout.tree"
@@ -189,11 +206,18 @@ onBeforeUnmount(() => {
         @pointerdown.prevent="resize"
       />
       <div v-if="ui.drawer" class="tree-backdrop" @click="ui.drawer = false" />
-      <CanvasView v-if="ui.canvas" />
-      <template v-else-if="selected && device && online">
-        <Inspector />
-        <div v-if="ui.inspectorOverlay" class="inspector-backdrop" @click="hideInspector()" />
+      <template v-if="selected && device && online">
         <AgentView :key="`${selected.deviceId}/${selected.sessionId}`" />
+        <div
+          v-if="chatFixed"
+          class="tree-resizer chat-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize chat"
+          @pointerdown.prevent="resizeChat"
+        />
+        <div v-if="ui.inspectorOverlay" class="inspector-backdrop" @click="hideInspector()" />
+        <Inspector />
       </template>
       <OfflinePanel v-else-if="selected && device" :device="device" />
       <section v-else class="welcome">

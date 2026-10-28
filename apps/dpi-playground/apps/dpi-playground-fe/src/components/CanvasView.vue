@@ -1,11 +1,11 @@
 <script setup lang="ts">
 // The network as a live, read-only graph from the hub's AG-UI stream (/api/agui), with the views
-// agents published (ui-tools add-on) under it. Clicking a session or agent only opens it here;
+// agents published (ui-tools add-on) under it. Clicking a session or agent opens it in the chat;
 // nothing on this view writes to a device.
 import { computed, onBeforeUnmount } from "vue";
 import { canvasLive, canvasLoaded, canvasState, useCanvasFeed } from "../client/agui";
 import { layoutCanvas, NODE_H, NODE_W, type CanvasNode } from "../client/canvas-layout";
-import { select, ui } from "../client/store";
+import { select } from "../client/store";
 import UiRender from "./UiRender.vue";
 
 const release = useCanvasFeed();
@@ -70,8 +70,6 @@ function open(n: CanvasNode) {
     select({ deviceId: n.deviceId, sessionId: n.sessionId, agentId: n.agentId });
   else if (n.type === "session" && n.firstAgentId !== undefined)
     select({ deviceId: n.deviceId, sessionId: n.sessionId, agentId: n.firstAgentId });
-  else return;
-  ui.canvas = false;
 }
 </script>
 
