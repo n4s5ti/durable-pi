@@ -31,7 +31,7 @@ import {
 import { lastAssistantText, messageText, toMarkdown, toTranscript } from "../../dpi-sdk/src/transcript.js";
 import { ApiFault, invalid, notFound } from "./errors.js";
 import { DatabaseSync } from "node:sqlite";
-import { mkdir, readdir, realpath, rename as renamePath, stat } from "node:fs/promises";
+import { copyFile, mkdir, readdir, realpath, rename as renamePath, stat } from "node:fs/promises";
 import { mkdirSync, writeFileSync, readFileSync, unlinkSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { homedir, hostname, platform } from "node:os";
@@ -106,28 +106,40 @@ const AGENT_DOCS = { [JOB_RUNS_DOC]: JobRuns, "demo.workspace": Workspace } as c
 export const AGENT_DOC_KINDS = Object.keys(AGENT_DOCS);
 export const DEVICE_DOC_KINDS = ["app.shared-state"];
 
+/** Changes at every boot and never with the wall clock. Linux and WSL2 only; elsewhere locks hold the PID alone. */
+const bootId = (() => {
+  try {
+    return readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+  } catch {
+    return "";
+  }
+})();
+
 export function lockFile(path: string) {
   mkdirSync(dirname(path), { recursive: true });
-  const take = () => writeFileSync(path, String(process.pid), { flag: "wx", mode: 0o600 });
+  const owner = bootId ? `${process.pid} ${bootId}` : String(process.pid);
+  const take = () => writeFileSync(path, owner, { flag: "wx", mode: 0o600 });
   try {
     take();
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-    const pid = Number(readFileSync(path, "utf8"));
-    let alive = false;
-    try {
-      process.kill(pid, 0);
-      alive = true;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "ESRCH") alive = true;
-    }
+    const [held, heldBoot] = readFileSync(path, "utf8").trim().split(" ");
+    const pid = Number(held);
+    // A lock from an earlier boot is stale even when a live process now has its PID.
+    let alive = !(heldBoot && bootId && heldBoot !== bootId);
+    if (alive)
+      try {
+        process.kill(pid, 0);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "ESRCH") alive = false;
+      }
     if (alive && pid !== process.pid) throw Error(`Database already owned by process ${pid}: ${path}`);
     unlinkSync(path);
     take();
   }
   return () => {
     try {
-      if (readFileSync(path, "utf8") === String(process.pid)) unlinkSync(path);
+      if (readFileSync(path, "utf8") === owner) unlinkSync(path);
     } catch {}
   };
 }
@@ -157,6 +169,9 @@ export class Store {
   shared!: SharedState;
   uid!: string;
   modelList: ModelInfo[] = [];
+  /** Curated models the OpenRouter catalog has, and those catalog entries. */
+  private present: (typeof curatedModels)[number][] = [...curatedModels];
+  private catalogModels: ReturnType<ReturnType<typeof openrouterProvider>["getModels"]> = [];
   private unlockCatalog: () => void;
   private unlockShared?: () => void;
   private listeners = new Set<() => void>();
@@ -192,12 +207,15 @@ export class Store {
     else {
       const provider = openrouterProvider();
       const catalog = provider.getModels();
-      for (const model of curatedModels)
-        if (!catalog.some((m) => m.id === model.id)) throw Error(`OpenRouter catalog missing ${model.id}`);
-      this.models.setProvider({
-        ...provider,
-        getModels: () => catalog.filter((m) => curatedModels.some((c) => c.id === m.id)),
+      // A curated model the catalog lacks (a pi-ai upgrade renamed it) is logged and left out; start with the rest.
+      this.present = curatedModels.filter((c) => {
+        const found = catalog.some((m) => m.id === c.id);
+        if (!found) console.error(`OpenRouter catalog missing ${c.id}; it is left out`);
+        return found;
       });
+      if (!this.present.length) throw Error("OpenRouter catalog has none of the curated models");
+      this.catalogModels = catalog.filter((m) => this.present.some((c) => c.id === m.id));
+      this.models.setProvider({ ...provider, getModels: () => this.catalogModels });
       if (this.anthropic) {
         const anthropic = anthropicProvider();
         const all = anthropic.getModels();
@@ -286,7 +304,8 @@ export class Store {
 
   private defaultModel() {
     if (this.options.provider === "faux") return fauxModels[0].id;
-    return this.anthropic ? anthropicDefaultModelId : defaultModelId;
+    if (this.anthropic) return anthropicDefaultModelId;
+    return this.present.some((c) => c.id === defaultModelId) ? defaultModelId : this.present[0].id;
   }
 
   private async loadModels(): Promise<ModelInfo[]> {
@@ -301,7 +320,14 @@ export class Store {
         reasoning: false,
         cost: { input: 0, output: 0 },
       }));
-    const available = await this.models.getAvailable("openrouter", { signal: AbortSignal.timeout(10000) });
+    let available: readonly { id: string; contextWindow: number; reasoning: boolean; cost: { input: number; output: number } }[];
+    try {
+      available = await this.models.getAvailable("openrouter", { signal: AbortSignal.timeout(10000) });
+    } catch (e) {
+      // A slow or failed live list must not stop the device: use the catalog read at construction.
+      console.error("[models] live model list failed; using the built-in catalog:", e instanceof Error ? e.message : e);
+      available = this.catalogModels;
+    }
     const direct: ModelInfo[] = this.anthropic
       ? anthropicModels.flatMap((c) => {
           const m = this.models.getModel("anthropic", c.id);
@@ -321,7 +347,7 @@ export class Store {
             : [];
         })
       : [];
-    return direct.concat(curatedModels.flatMap((c) => {
+    return direct.concat(this.present.flatMap((c) => {
       const m = available.find((m) => m.id === c.id);
       return m
         ? [
@@ -352,7 +378,7 @@ export class Store {
     const exact = model?.provider === "openrouter" ? model.modelId : `${model?.provider}/${model?.modelId}`;
     return {
       provider: "openrouter",
-      modelId: curatedModels.some((m) => m.id === exact) ? exact : defaultModelId,
+      modelId: this.present.some((m) => m.id === exact) ? exact : this.defaultModel(),
     };
   }
 
@@ -366,7 +392,7 @@ export class Store {
         : m.provider === "anthropic"
           ? this.anthropic && anthropicModels.some((c) => c.id === m.modelId) && !!this.models.getModel(m.provider, m.modelId)
           : m.provider === "openrouter" &&
-            curatedModels.some((c) => c.id === m.modelId) &&
+            this.present.some((c) => c.id === m.modelId) &&
             !!this.models.getModel(m.provider, m.modelId);
     if (!known) throw invalid(`Unknown model ${m.provider}/${m.modelId}. Choose one from GET /v1/device models`);
     return { provider: m.provider, modelId: m.modelId };
@@ -931,6 +957,76 @@ export class Store {
 
   async inspect(h: Harness) {
     return h.inspect(ctx);
+  }
+
+  /**
+   * Work that waits for a person. `blocked`: tasks no registered definition can run; restore the definition or abort
+   * them (they end `orphaned`). `queued`: follow-ups in a conversation with no foreground work, which wait until the
+   * next submission or a withdraw. Reads only.
+   */
+  async stuck(h: Harness) {
+    const { tasks, submissions } = await h.inspect(ctx);
+    const busy = new Set(
+      tasks.filter((t) => t.state.kind !== "blocked" && !t.record.background).map((t) => t.record.conversationId),
+    );
+    return {
+      blocked: tasks.flatMap((t) =>
+        t.state.kind === "blocked"
+          ? [{ taskId: t.record.id as number, kind: t.record.kind, conversationId: t.record.conversationId as number, reason: t.state.reason }]
+          : [],
+      ),
+      queued: submissions
+        .filter((s) => s.status === "queued" && !busy.has(s.conversationId))
+        .map((s) => ({ submissionId: s.id as number, conversationId: s.conversationId as number })),
+    };
+  }
+
+  /**
+   * Copy an idle session's database to `DPI_BACKUP_DIR`/<session id>-<time>/. The harness closes for the copy and
+   * reopens, so nothing writes the files meanwhile; a request for the session during the copy fails `unavailable`.
+   */
+  async backup(row: SessionRow) {
+    const dir = process.env.DPI_BACKUP_DIR;
+    if (!dir) throw new ApiFault("unavailable", "Set DPI_BACKUP_DIR to a folder on another disk to enable backups");
+    const opened = this.opened.get(row.id);
+    if (!opened) throw new ApiFault("unavailable", this.errors.get(row.id) ?? `Session ${row.name} is unavailable`);
+    // Take the session out of service before the idle check, so no new submission lands between the check and the close.
+    this.opened.delete(row.id);
+    this.errors.set(row.id, `Session ${row.name} is being backed up`);
+    const { tasks, submissions } = await opened.harness.inspect(ctx).catch((e) => {
+      this.opened.set(row.id, opened);
+      this.errors.delete(row.id);
+      throw e;
+    });
+    if (tasks.length || submissions.length) {
+      this.opened.set(row.id, opened);
+      this.errors.delete(row.id);
+      throw new ApiFault("conflict", "Session is busy; try the backup later");
+    }
+    opened.unsubscribe();
+    try {
+      await opened.harness.close(ctx);
+    } finally {
+      opened.unlock();
+    }
+    const target = join(resolve(dir), `${row.id}-${Date.now()}`);
+    try {
+      await mkdir(target, { recursive: true });
+      for (const suffix of ["", "-wal", "-shm"])
+        await copyFile(`${row.dbPath}${suffix}`, join(target, `agent.sqlite${suffix}`)).catch((e) => {
+          if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+        });
+    } finally {
+      try {
+        (await this.openAgent(row)).resume();
+      } catch (e) {
+        this.errors.set(row.id, String(e instanceof Error ? e.message : e));
+        throw e;
+      } finally {
+        this.notify();
+      }
+    }
+    return { backup: target };
   }
 
   async entries(c: Conversation, cursor: string | undefined, limit: number): Promise<Page<WireEntry>> {

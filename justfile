@@ -21,6 +21,9 @@ mod test 'just/test'
 # Proactive DPI demo: just proactive <command>
 mod proactive 'just/proactive'
 
+# Omarchy bar plugin: just omarchy install
+mod omarchy 'just/omarchy'
+
 # List command groups
 default:
     @just --list

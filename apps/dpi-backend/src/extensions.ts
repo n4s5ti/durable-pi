@@ -36,6 +36,32 @@ const Receipt = defineDoc<{ applied: boolean; result: string }>({
   initial: () => ({ applied: false, result: "" }),
   checkpointWhen: () => false,
 });
+
+/**
+ * Run one outside effect (a Slack post, an email, a deploy) at most once per tool task, so its tool can be `safe`.
+ * `effect` gets an idempotency key to send to the service. A rerun after the receipt commit returns the stored
+ * result; a crash between the call and the commit repeats the call with the same key, so the service must ignore a
+ * duplicate key or let you ask whether the key ran. A service with neither cannot be made safe here.
+ */
+export async function once(
+  api: Pick<ToolExecutionApi, "taskId" | "commit">,
+  ctx: Context,
+  sessionId: string,
+  effect: (key: string) => Promise<string>,
+) {
+  const done = await api.commit(async (tx) => {
+    const receipt = await tx.doc(Receipt, api.taskId);
+    return receipt.applied ? receipt.result : undefined;
+  }, ctx);
+  if (done !== undefined) return done;
+  const result = await effect(`${sessionId}:${api.taskId}`);
+  return api.commit(async (tx) => {
+    const receipt = await tx.doc(Receipt, api.taskId);
+    if (!receipt.applied) Object.assign(receipt, { applied: true, result });
+    return receipt.result;
+  }, ctx);
+}
+
 /** ping_on_call_engineer pages once per agent; this records the page. */
 const Pager = defineDoc<{ paged: boolean; at: number; page: string; summary: string }>({
   kind: "demo.pager",

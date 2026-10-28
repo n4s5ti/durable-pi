@@ -8,6 +8,7 @@
 //   "search: <words>" → one search_history call
 //   "page: <summary>" → one ping_on_call_engineer call
 //   "tool: <name> <args json>" → one call of any tool, e.g. tool: grep {"pattern":"TODO"}
+//   "state: <operation> <path>[ <value json>]" → one update_state call
 //   "Release check: …" (the release-check job's subagent) → one bash call
 //   anything else  → "Echo: <text>"
 import type { MutableModels } from "@earendil-works/pi-ai/models";
@@ -70,6 +71,10 @@ export function installFaux(models: MutableModels) {
     }
     if (prompt.startsWith("search:")) return call("search_history", { query: prompt.slice(7).trim() });
     if (prompt.startsWith("page:")) return call("ping_on_call_engineer", { summary: prompt.slice(5).trim() });
+    if (prompt.startsWith("state:")) {
+      const [operation, path, ...value] = prompt.slice(6).trim().split(" ");
+      return call("update_state", { operation, path, ...(value.length ? { value_json: value.join(" ") } : {}) });
+    }
     if (prompt.startsWith("tool:")) {
       const m = prompt.slice(5).trim().match(/^(\S+)\s*(\{.*\})?$/s);
       return call(m?.[1] ?? "", m?.[2] ? JSON.parse(m[2]) : {});

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "n4s5ti.durable-pi",
+  "name": "Durable Pi",
+  "version": "1.0.0",
+  "author": "n4s5ti",
+  "license": "MIT",
+  "description": "Durable Pi network status in the bar; opens the hub web UI as a web app",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "Durable Pi",
+    "description": "Devices, sessions and busy agents from the Durable Pi hub",
+    "category": "Custom",
+    "aliases": ["dpi", "durable pi", "agents"],
+    "defaultSection": "right",
+    "allowMultiple": false,
+    "defaults": { "hubUrl": "http://127.0.0.1:4781/", "pollSeconds": "5" },
+    "schema": [
+      { "key": "hubUrl", "type": "string", "label": "Hub URL", "defaultValue": "http://127.0.0.1:4781/" },
+      { "key": "pollSeconds", "type": "string", "label": "Status poll interval (seconds)", "defaultValue": "5" }
+    ]
+  }
+}

@@ -41,6 +41,18 @@ export const JobRuns = defineDoc<JobRunsDoc>({
   checkpointWhen: () => false,
 });
 
+/**
+ * Each finished step's value by step id, so a phase resumed after a crash does not rerun finished steps. Ids count
+ * steps in call order, so the kind and label are kept too: a resumed phase that takes another branch runs its steps.
+ */
+const StepValues = defineDoc<{ values: Record<string, { v: JsonValue; kind: JobStepKind; label: string }> }>({
+  kind: "demo.job-step-values",
+  version: 1,
+  scope: "task",
+  initial: () => ({ values: {} }),
+  checkpointWhen: () => false,
+});
+
 type Values = Record<string, JobInputValue>;
 type Data = Record<string, JsonValue>;
 type JobInput = { job: string; input: Values };
@@ -443,13 +455,21 @@ export function createJobs(deps: JobsDeps) {
     };
     const step: Phase["step"] = async (kind, text, fn) => {
       const id = `${spec.id}:${cp.iteration}:${counter++}`;
+      // A step that finished before a restart returns its stored value instead of running its command again.
+      const stored = (await runtime.snapshot(StepValues, task.id, ctx))?.values[id];
+      if (stored?.kind === kind && stored.label === text) return stored.v as never;
       const at = runtime.now();
       await record((_r, phase) => upsertStep(phase, { id, kind, label: text, status: "running", iteration: cp.iteration, at }));
       try {
         const { value, detail } = await fn();
-        await record((_r, phase) =>
-          upsertStep(phase, { id, kind, label: text, status: "done", iteration: cp.iteration, at, ms: runtime.now() - at, ...(detail ? { detail: clip(detail, 600) } : {}) }),
-        );
+        // The done record and the stored value commit together: a step is either fully recorded or not at all.
+        await runtime.commit(async (tx) => {
+          const current = await runOf(tx, task);
+          upsertStep(current.phases[index], { id, kind, label: text, status: "done", iteration: cp.iteration, at, ms: runtime.now() - at, ...(detail ? { detail: clip(detail, 600) } : {}) });
+          current.updatedAt = runtime.now();
+          (await tx.doc(StepValues, task.id)).values[id] = { v: plain(value ?? null) as JsonValue, kind, label: text };
+          return undefined;
+        }, ctx);
         return value;
       } catch (e) {
         if (!runtime.signal.aborted)
@@ -695,8 +715,8 @@ export function createJobs(deps: JobsDeps) {
     }
     if (spec.kind === "approval") return approvalPhase(def, index, task, runtime, ctx);
 
-    // Enter the phase. Steps recorded by this same iteration mean a crash interrupted it: replace them.
-    let resumed = false;
+    // Enter the phase. Steps recorded by this same iteration mean a crash interrupted it: keep the finished steps
+    // (their values are stored, so they do not run again) and replace the rest.
     let snapshot: JobRun | undefined;
     await runtime.commit(async (tx) => {
       const run = await runOf(tx, task);
@@ -704,9 +724,11 @@ export function createJobs(deps: JobsDeps) {
       const now = runtime.now();
       if (phase.status === "pending") phase.startedAt = now;
       else if (phase.steps.some((s) => s.iteration === cp.iteration)) {
-        phase.steps = plain(phase.steps.filter((s) => s.iteration !== cp.iteration));
+        const { values } = await tx.doc(StepValues, task.id);
+        phase.steps = plain(phase.steps.filter((s) => s.iteration !== cp.iteration || values[s.id]?.label === s.label));
+        // A fixed id, so the note never shifts the step counter that matches stored values.
+        upsertStep(phase, { id: `${spec.id}:${cp.iteration}:resumed`, kind: "note", label: "Resumed from the last checkpoint after a restart", status: "done", iteration: cp.iteration, at: now });
         run.resumed += 1;
-        resumed = true;
       }
       phase.status = "running";
       run.status = "running";
@@ -716,7 +738,6 @@ export function createJobs(deps: JobsDeps) {
       return undefined;
     }, ctx);
     const p = phaseApi(def, index, task, runtime, ctx, snapshot!);
-    if (resumed) await p.note("Resumed from the last checkpoint after a restart");
 
     let outcome: Outcome;
     try {
