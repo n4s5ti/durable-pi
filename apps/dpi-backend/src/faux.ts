@@ -7,6 +7,7 @@
 //   "check:[ <task id>|<job id>]" → one check_durable_job call
 //   "search: <words>" → one search_history call
 //   "page: <summary>" → one ping_on_call_engineer call
+//   "state: <operation> <path>[ <value json>]" → one update_state call
 //   "Release check: …" (the release-check job's subagent) → one bash call
 //   anything else  → "Echo: <text>"
 import type { MutableModels } from "@earendil-works/pi-ai/models";
@@ -69,6 +70,10 @@ export function installFaux(models: MutableModels) {
     }
     if (prompt.startsWith("search:")) return call("search_history", { query: prompt.slice(7).trim() });
     if (prompt.startsWith("page:")) return call("ping_on_call_engineer", { summary: prompt.slice(5).trim() });
+    if (prompt.startsWith("state:")) {
+      const [operation, path, ...value] = prompt.slice(6).trim().split(" ");
+      return call("update_state", { operation, path, ...(value.length ? { value_json: value.join(" ") } : {}) });
+    }
     if (prompt.startsWith("Release check:"))
       return call("bash", { command: "git log --oneline -5 2>/dev/null || echo 'no git history'; ls | head -5" });
     if (prompt.startsWith("slow:")) return fauxAssistantMessage(fauxText(prompt.slice(5).trim().repeat(4)));

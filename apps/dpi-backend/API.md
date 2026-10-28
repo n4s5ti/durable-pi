@@ -29,6 +29,8 @@ The contract every Durable Agent Network client uses: the web hub, `dpi-tui`, sc
 | `GET /v1/sessions/:s/tasks` | `?status=live\|terminal&limit=` | task nodes / recent outcomes |
 | `POST /v1/sessions/:s/tasks/:taskId/abort` | | `{status}` |
 | `GET /v1/sessions/:s/inspect` | | recovery inspection |
+| `GET /v1/sessions/:s/stuck` | | `{blocked:[{taskId,kind,conversationId,reason}], queued:[{submissionId,conversationId}]}`: tasks no definition can run (restore it, or abort the task: it ends `orphaned`) and follow-ups queued where no foreground work runs (withdraw them or send a new message). Reads only |
+| `POST /v1/sessions/:s/backup` | | `{backup}`: copies the idle session's `agent.sqlite` (and `-wal`/`-shm`) to `$DPI_BACKUP_DIR/<id>-<ms>/`. The session closes for the copy and reopens; requests for it meanwhile get `503 unavailable`. `409 conflict` while any task is live or a submission is queued; `503` without `DPI_BACKUP_DIR` |
 | `GET /v1/sessions/:s/submissions/:id` | `?waitMs=` (≤300000) | `SendResult`, optionally long-polled |
 | `GET / POST /v1/sessions/:s/agents` | POST `{from?, name?}` | `AgentSummary[]` / `201 AgentSummary` |
 | `GET / PATCH .../agents/:a` | PATCH `{name}` | `AgentDetail` (config with `readOnly`, every tool with `replay`, `writes` and `offered`, extensions) / summary |

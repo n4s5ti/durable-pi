@@ -33,6 +33,7 @@ With the repo's network config, `just net up local && just backend run` does the
 | `DPI_PROVIDER` | `openrouter` | `faux` gives a free deterministic model for tests |
 | `OPENROUTER_API_KEY` | | model access, required unless `DPI_PROVIDER=faux`. Without it the device lists no models. Never sent to clients |
 | `TYPESAFE_API_KEY` | | optional: `jev-damage-control` asks Jev with it, else through OpenRouter |
+| `DPI_BACKUP_DIR` | | optional: where `POST /v1/sessions/:s/backup` copies an idle session's database. Put it on another disk or a synced folder; call the route from cron, for example `0 * * * * curl -fsS -X POST -H "Authorization: Bearer $DPI_TOKEN" http://127.0.0.1:4780/v1/sessions/<id>/backup` |
 
 Flags `--port`, `--host`, `--name`, `--start-dirs`, `--data-dir` and `--env-file` override the env.
 
