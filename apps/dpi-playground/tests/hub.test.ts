@@ -16,6 +16,7 @@ import {
 import { readSse } from "../../dpi-sdk/src/sse.js";
 import { NetworkRegistry } from "../../dpi-sdk/src/node/registry.js";
 import type { MuxFrame, NetworkDevice } from "../../dpi-sdk/src/api.js";
+import { applyPatch, type AguiEvent, type CanvasState } from "../../dpi-sdk/src/agui.js";
 
 async function bootHub(home: string, networkFile: string, env: Record<string, string>) {
   const port = await freePort();
@@ -110,6 +111,32 @@ test("hub: registry from YAML, monitoring, token-injecting proxy, guard, mux, of
       "tokens never reach the browser",
     );
 
+    // AG-UI: a read-only canvas gets RUN_STARTED + STATE_SNAPSHOT, then deltas as the network changes.
+    const aguiStop = new AbortController();
+    const aguiEvents: AguiEvent[] = [];
+    let canvas: CanvasState | undefined;
+    const aguiRes = await fetch(`${hub.base}/api/agui`, { signal: aguiStop.signal });
+    assert.equal(aguiRes.headers.get("content-type"), "text/event-stream; charset=utf-8");
+    void (async () => {
+      for await (const m of readSse(aguiRes.body!)) {
+        const event = JSON.parse(m.data) as AguiEvent;
+        aguiEvents.push(event);
+        if (event.type === "STATE_SNAPSHOT") canvas = event.snapshot;
+        if (event.type === "STATE_DELTA") canvas = applyPatch(canvas!, event.delta);
+      }
+    })().catch(() => {});
+    await until(async () => !!canvas, 5000, "agui snapshot");
+    assert.deepEqual(
+      aguiEvents.slice(0, 2).map((e) => e.type),
+      ["RUN_STARTED", "STATE_SNAPSHOT"],
+    );
+    assert.equal(canvas!.devices["box-a"].status, "online");
+    assert.equal(
+      (await fetch(`${hub.base}/api/agui`, json({ type: "STATE_SNAPSHOT" }))).status,
+      404,
+      "the canvas stream has no write route",
+    );
+
     // Proxy: browser requests carry no token; the hub injects it.
     const info = await (await fetch(`${hub.base}/api/devices/box-a/v1/device`)).json();
     assert.equal(info.name, "box-a");
@@ -119,6 +146,16 @@ test("hub: registry from YAML, monitoring, token-injecting proxy, guard, mux, of
     );
     assert.equal(created.status, 201);
     const session = await created.json();
+    await until(
+      async () => !!canvas?.devices["box-a"].sessions[session.id],
+      8000,
+      "agui delta carries the new session",
+    );
+    assert.ok(aguiEvents.some((e) => e.type === "STATE_DELTA"));
+    const streamed = JSON.stringify(aguiEvents);
+    for (const leak of [tokenA, tokenB, a.base, t.work])
+      assert.equal(streamed.includes(leak), false, "no tokens, URLs or paths on the canvas stream");
+    aguiStop.abort();
     assert.equal(
       (await fetch(`${hub.base}/api/devices/box-a/v1/sessions/${session.id}/agents/main/events`))
         .status,

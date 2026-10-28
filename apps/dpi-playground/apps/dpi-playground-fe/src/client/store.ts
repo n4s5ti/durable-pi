@@ -240,6 +240,8 @@ export const ui = reactive({
   drawer: false,
   /** Narrow screens: the inspector opens over the chat instead of taking a column. */
   inspectorOverlay: false,
+  /** The live network canvas replaces the main view while open. */
+  canvas: false,
   tab: "session",
   composer: "",
   dialog: undefined as Dialog | undefined,

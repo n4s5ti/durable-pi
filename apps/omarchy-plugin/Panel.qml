@@ -5,7 +5,8 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 
-// Status panel: every device the hub knows, its sessions and which of them are busy. The bar widget owns the data.
+// Status panel: every device the hub knows, its sessions and which of them are busy, as a list or as
+// the live read-only canvas. The bar widget owns the data.
 Panel {
   id: root
   moduleName: "n4s5ti.durable-pi"
@@ -16,6 +17,8 @@ Panel {
   readonly property var barIdentity: hostWidget || root
   readonly property string screenName: panel.screen ? String(panel.screen.name || "") : ""
   readonly property var network: hostWidget ? hostWidget.network : ({ ok: false, loaded: false, devices: [] })
+  property bool canvasMode: false
+  readonly property bool canvasStale: !!hostWidget && hostWidget.canvasState !== null && !hostWidget.canvasLive
 
   Commons.Translations { id: strings; directory: Qt.resolvedUrl("i18n") }
 
@@ -52,8 +55,10 @@ Panel {
     open: root.opened
     centerOnBar: true
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(380))
-    contentHeight: panel.fittedContentHeight(body.implicitHeight, Style.space(520))
+    contentWidth: panel.fittedContentWidth(Style.space(root.canvasMode ? 760 : 380))
+    contentHeight: root.canvasMode
+      ? panel.fittedContentHeight(Style.space(560), Style.space(560))
+      : panel.fittedContentHeight(body.implicitHeight, Style.space(520))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -93,6 +98,21 @@ Panel {
               color: root.network.ok ? Commons.Color.foreground : Commons.Color.muted
               font.pixelSize: Style.font.caption
             }
+
+            Label {
+              Layout.fillWidth: true
+              visible: root.canvasMode && root.canvasStale
+              text: strings.t("stale")
+              color: Commons.Color.accent
+              font.pixelSize: Style.font.caption
+            }
+          }
+
+          Button {
+            text: root.canvasMode ? strings.t("list") : strings.t("canvas")
+            bordered: true
+            enabled: root.canvasMode || (!!root.hostWidget && root.hostWidget.canvasState !== null)
+            onClicked: root.canvasMode = !root.canvasMode
           }
 
           Button {
@@ -125,8 +145,20 @@ Panel {
 
         PanelSeparator { Layout.fillWidth: true }
 
+        Loader {
+          Layout.fillWidth: true
+          Layout.fillHeight: true
+          visible: root.canvasMode
+          active: root.canvasMode && root.opened
+          sourceComponent: ReadOnlyCanvas {
+            canvasState: root.hostWidget ? root.hostWidget.canvasState : null
+            stale: root.canvasStale
+          }
+        }
+
         Flickable {
           id: scroll
+          visible: !root.canvasMode
           Layout.fillWidth: true
           Layout.fillHeight: true
           Layout.preferredHeight: list.implicitHeight

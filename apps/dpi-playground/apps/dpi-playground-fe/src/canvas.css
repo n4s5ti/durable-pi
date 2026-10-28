@@ -1,0 +1,285 @@
+/* Live network canvas (CanvasView.vue): a read-only graph fed by the hub's AG-UI stream. */
+.net-workspace > .canvas-view {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.canvas-view {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 18px 22px;
+  gap: 12px;
+}
+.canvas-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.canvas-head .eyebrow {
+  color: var(--muted);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  margin-right: 12px;
+}
+.canvas-stale {
+  color: var(--accent);
+  font-size: 14px;
+}
+.canvas-legend {
+  color: var(--muted);
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.canvas-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  display: inline-block;
+  border: 1px solid #756062;
+  margin-left: 8px;
+}
+.canvas-legend i.busy {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.canvas-legend i.online {
+  border-color: var(--secondary);
+}
+.canvas-empty {
+  color: var(--muted);
+  padding: 40px 0;
+  text-align: center;
+}
+.canvas-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: radial-gradient(ellipse at top left, #39232522, transparent 60%), var(--surface);
+}
+.canvas-scroll.stale svg {
+  opacity: 0.55;
+}
+.canvas-edge {
+  fill: none;
+  stroke: #4a3a3c;
+  stroke-width: 1.5;
+}
+.canvas-edge.hot {
+  stroke: var(--accent);
+}
+.canvas-node rect {
+  fill: #241b1c;
+  stroke: #4a3a3c;
+  stroke-width: 1;
+}
+.canvas-node.online rect {
+  stroke: var(--secondary);
+}
+.canvas-node.busy rect {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  animation: canvas-pulse 1.6s ease-in-out infinite;
+}
+.canvas-node.clickable {
+  cursor: pointer;
+}
+.canvas-node.clickable:hover rect,
+.canvas-node.clickable:focus-visible rect {
+  fill: #2e2324;
+}
+.canvas-node:focus {
+  outline: none;
+}
+.canvas-node text {
+  fill: #f2eeee;
+  font-size: 13px;
+}
+.canvas-node .label {
+  font-weight: 600;
+}
+.canvas-node .detail {
+  fill: var(--muted);
+  font-size: 11.5px;
+}
+.canvas-node.device .label {
+  font-family: var(--font-title);
+}
+.canvas-more {
+  color: var(--muted);
+  font-size: 13px;
+}
+@keyframes canvas-pulse {
+  50% {
+    stroke-opacity: 0.45;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .canvas-node.busy rect {
+    animation: none;
+  }
+}
+@media (max-width: 740px) {
+  .canvas-view {
+    padding: 12px;
+  }
+}
+.icon-button.active {
+  color: var(--accent);
+  background: #ffffff0d;
+}
+/* Agent views (ui-tools): the closed catalog rendered by UiRender.vue. */
+.canvas-views {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+.canvas-view-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.canvas-view-card.busy {
+  border-color: var(--accent);
+}
+.canvas-view-card > header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.canvas-view-card > header small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.ui-card {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ui-card h4 {
+  margin: 0;
+  font-family: var(--font-title);
+  font-size: 15px;
+}
+.ui-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.ui-row > * {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.ui-column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ui-text {
+  margin: 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.ui-text.muted,
+.ui-badge.muted {
+  color: var(--muted);
+}
+.ui-text.accent {
+  color: var(--accent);
+}
+.ui-text.urgent {
+  color: #ff6b6b;
+}
+.ui-markdown {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.ui-markdown > :first-child {
+  margin-top: 0;
+}
+.ui-markdown > :last-child {
+  margin-bottom: 0;
+}
+.ui-metric {
+  display: flex;
+  flex-direction: column;
+}
+.ui-metric strong {
+  font-family: var(--font-title);
+  font-size: 24px;
+}
+.ui-metric small,
+.ui-metric span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.ui-badge {
+  align-self: flex-start;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid #4a3a3c;
+}
+.ui-badge.accent {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.ui-badge.urgent {
+  border-color: #ff6b6b;
+  color: #ff6b6b;
+}
+.ui-progress {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 8px;
+  font-size: 13px;
+}
+.ui-progress span {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}
+.ui-progress .bar {
+  height: 6px;
+  border-radius: 3px;
+  background: #3a2d2f;
+  overflow: hidden;
+  align-self: center;
+}
+.ui-progress .bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.ui-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 14px;
+}
+.ui-table {
+  border-collapse: collapse;
+  font-size: 13px;
+  width: 100%;
+}
+.ui-table th,
+.ui-table td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.ui-table th {
+  color: var(--muted);
+  font-weight: 550;
+}

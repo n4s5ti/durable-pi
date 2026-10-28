@@ -8,6 +8,7 @@ import {
   type AppState,
   type StateChange,
 } from "../../dpi-sdk/src/app-state.js";
+import { UI_LIMITS, type UiTemplate } from "../../dpi-sdk/src/ui-spec.js";
 
 const Data = defineDoc<AppState>({
   kind: "app.shared-state",
@@ -29,6 +30,15 @@ const Receipts = defineDocFamily<{ applied: boolean; result: string }, null>({
   scope: "session",
   family: true,
   initial: () => ({ applied: false, result: "" }),
+  checkpointWhen: () => false,
+});
+
+/** UI templates any agent on this device can reuse (ui-tools add-on), as JSON by name. */
+const UiTemplates = defineDoc<{ templates: Record<string, string> }>({
+  kind: "ui.templates",
+  version: 1,
+  scope: "session",
+  initial: () => ({ templates: {} }),
   checkpointWhen: () => false,
 });
 
@@ -80,6 +90,21 @@ export class SharedState {
         receipt.result = JSON.stringify(next);
       }
       return next;
+    }, ctx);
+  }
+  async templates() {
+    const doc = await this.harness.snapshot(UiTemplates, ctx);
+    return Object.fromEntries(
+      Object.entries(doc?.templates ?? {}).map(([name, json]) => [name, JSON.parse(json) as UiTemplate]),
+    );
+  }
+  /** Save or replace a template by name; a new name beyond the limit is refused. */
+  async saveTemplate(template: UiTemplate) {
+    await this.harness.commit(async (tx) => {
+      const doc = await tx.doc(UiTemplates);
+      if (!(template.name in doc.templates) && Object.keys(doc.templates).length >= UI_LIMITS.templates)
+        throw Error(`This device already holds ${UI_LIMITS.templates} UI templates; replace one by name.`);
+      doc.templates[template.name] = JSON.stringify(template);
     }, ctx);
   }
   async close() {

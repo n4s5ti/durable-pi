@@ -9,6 +9,7 @@ import { hostname, networkInterfaces } from "node:os";
 import { NetworkRegistry } from "../../../../dpi-sdk/src/node/registry.js";
 import { DeviceMonitor } from "./monitor.js";
 import { StreamMux } from "./mux.js";
+import { AguiFeed } from "./agui.js";
 import { proxy } from "./proxy.js";
 import { guard } from "./guard.js";
 import { seedFromConfig } from "./seed.js";
@@ -29,6 +30,8 @@ const configFile = seedFromConfig(registry, appDir);
 const monitor = new DeviceMonitor(registry);
 monitor.start();
 const mux = new StreamMux(registry, monitor);
+const agui = new AguiFeed(monitor);
+agui.start();
 
 const allowedHosts = new Set([`localhost:${port}`, `127.0.0.1:${port}`, `[::1]:${port}`]);
 if (host !== "127.0.0.1" && host !== "localhost") {
@@ -89,6 +92,8 @@ app.put(
   }),
 );
 app.get("/api/stream", (req, res) => mux.open(req, res));
+// Read-only AG-UI state stream for canvases: STATE_SNAPSHOT, then STATE_DELTA. See agui.ts.
+app.get("/api/agui", (req, res) => agui.open(req, res));
 app.put(
   "/api/stream/:streamId",
   safe((req, res) => res.json(mux.subscribe(String(req.params.streamId), req.body?.subs))),
@@ -136,6 +141,7 @@ const shutdown = async () => {
   if (closing) return;
   closing = true;
   monitor.stop();
+  agui.stop();
   server.close();
   server.closeAllConnections();
   await vite?.close();

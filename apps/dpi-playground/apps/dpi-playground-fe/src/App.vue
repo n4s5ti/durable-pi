@@ -12,6 +12,7 @@ import {
   Database,
   GitFork,
   Activity,
+  Workflow,
 } from "lucide-vue-next";
 import NetworkSidebar from "./components/NetworkSidebar.vue";
 import AgentView from "./components/AgentView.vue";
@@ -20,6 +21,7 @@ import OfflinePanel from "./components/OfflinePanel.vue";
 import NewSessionDialog from "./components/NewSessionDialog.vue";
 import PromptDialog from "./components/PromptDialog.vue";
 import ModelPicker from "./components/ModelPicker.vue";
+import CanvasView from "./components/CanvasView.vue";
 import {
   attempt,
   boot,
@@ -136,6 +138,15 @@ onBeforeUnmount(() => {
           }}</span
         ><button
           class="icon-button"
+          :class="{ active: ui.canvas }"
+          title="Live canvas"
+          aria-label="Live canvas"
+          :aria-pressed="ui.canvas"
+          @click="ui.canvas = !ui.canvas"
+        >
+          <Workflow :size="19" /></button
+        ><button
+          class="icon-button"
           title="How this works"
           aria-label="How this works"
           @click="ui.dialog = { kind: 'help' }"
@@ -178,7 +189,8 @@ onBeforeUnmount(() => {
         @pointerdown.prevent="resize"
       />
       <div v-if="ui.drawer" class="tree-backdrop" @click="ui.drawer = false" />
-      <template v-if="selected && device && online">
+      <CanvasView v-if="ui.canvas" />
+      <template v-else-if="selected && device && online">
         <Inspector />
         <div v-if="ui.inspectorOverlay" class="inspector-backdrop" @click="hideInspector()" />
         <AgentView :key="`${selected.deviceId}/${selected.sessionId}`" />

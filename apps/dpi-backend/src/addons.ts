@@ -5,6 +5,7 @@
 //   system-prompts       a checklist of built-in system prompts, rendered as one section
 //   jev-damage-control   Jev judges every bash command before it runs and blocks destructive ones
 //   toolkit              search, todo, documents, web and GitHub tools (toolkit.ts)
+//   ui-tools             read-only views on the live canvas and device-wide UI templates (ui-tools.ts)
 //
 // A hook runs outside the commit line and can run again after a crash. A hook that asks a person or an outside API
 // must store the answer with `api.memo`, as the Jev guard does. A `safe` tool rerun after a crash skips `beforeTool`.
@@ -13,7 +14,9 @@ import { join } from "node:path";
 import { defineDoc, defineExtension, hook, section, ToolTask, type Extension } from "@earendil-works/pi-durable";
 import type { HarnessExtensionInfo } from "../../dpi-sdk/src/api.js";
 import { askJev, type JevAnswer, type JevQuestion } from "./jev.js";
+import type { SharedState } from "./shared-state.js";
 import { Toolkit } from "./toolkit.js";
+import { createUiTools } from "./ui-tools.js";
 
 const PROMPTS_DIR = join(import.meta.dirname, "../prompts");
 
@@ -105,9 +108,15 @@ export const ADDON_INFO: Omit<HarnessExtensionInfo, "enabled" | "prompts">[] = [
     description:
       "grep, glob and ast_grep search; a todo list that survives restarts; think; read_sqlite, read_archive and read_document (PDF, Office, EPUB); web_search and fetch_url; read-only github. On for new sessions.",
   },
+  {
+    name: "ui-tools",
+    title: "UI tools",
+    description:
+      "Read-only views on the live canvas from a fixed component catalog (cards, metrics, tables, progress…), plus UI templates saved on this device for any agent to reuse: ui_render, ui_clear, ui_template_save, ui_template_list, ui_template_use.",
+  },
 ];
 
-export function createAddons(opts: { offline: boolean }) {
+export function createAddons(opts: { offline: boolean; shared: SharedState }) {
   const prompts = defineExtension({
     name: "system-prompts",
     sections: [
@@ -146,8 +155,14 @@ export function createAddons(opts: { offline: boolean }) {
       }),
     ],
   });
-  const all: Record<string, Extension> = { "system-prompts": prompts, "jev-damage-control": jev, toolkit: Toolkit };
-  return { all, list: [prompts, jev, Toolkit] };
+  const uiTools = createUiTools(opts.shared);
+  const all: Record<string, Extension> = {
+    "system-prompts": prompts,
+    "jev-damage-control": jev,
+    toolkit: Toolkit,
+    "ui-tools": uiTools,
+  };
+  return { all, list: [prompts, jev, Toolkit, uiTools] };
 }
 
 export type Addons = ReturnType<typeof createAddons>;
