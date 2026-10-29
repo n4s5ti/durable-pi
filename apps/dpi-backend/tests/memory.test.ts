@@ -1,7 +1,7 @@
 // DPI memory: the store on its own, then the extension in a live session (faux model).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ftsQuery, MemoryStore, rulesBlock } from "../src/memory.js";
@@ -33,6 +33,7 @@ test("memory: stores, dedupes, searches by words, filters by kind, and survives 
     assert.equal(m.search("").length, 3, "an empty query lists the newest");
     assert.throws(() => m.add({ kind: "nope" as never, text: "x" }), /kind must be one of/);
     assert.throws(() => m.add({ kind: "fact", text: "  " }), /text is required/);
+    assert.equal(statSync(join(dir, "memory.sqlite")).mode & 0o777, 0o600, "owner-only file");
     const again = MemoryStore.open(join(dir, "memory.sqlite"));
     assert.equal(again.stats().total, 3, "a second handle on the file sees the same memories");
     again.close();

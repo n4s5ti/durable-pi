@@ -9,6 +9,7 @@
 //   identity  originId makes imports idempotent (e.g. "hindsight:<bank>:<id>"); exact duplicates of an
 //             active memory's kind and text are not stored twice
 //   forget    soft: the row stays with active=0 and a reason, so nothing is lost by mistake
+import { chmodSync, closeSync, existsSync, openSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, GenerationTask, hook, section } from "@earendil-works/pi-durable";
@@ -95,6 +96,9 @@ export class MemoryStore {
   private constructor(private readonly db: DatabaseSync) {}
 
   static open(path: string) {
+    // Memories are private: create the file owner-only before SQLite opens it (its -wal and -shm follow).
+    if (!existsSync(path)) closeSync(openSync(path, "a", 0o600));
+    chmodSync(path, 0o600);
     const db = new DatabaseSync(path);
     db.exec(`
       PRAGMA journal_mode = WAL;
