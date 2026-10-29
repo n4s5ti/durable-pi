@@ -167,3 +167,58 @@ test("memory: a memory recalled right after it is stored ranks first, before its
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Vectors that model the reported miss: the right memory leads semantically but shares no words with the
+// question, while a dozen memories share only the common word "box" and sit far below it semantically.
+const WEIGHTED: [RegExp, number][] = [
+  [/gpu|graphics|rtx|video card|vram/i, 3],
+  [/gpu|graphics|rtx|card|vram|ram|nvme|cpu|fan|drive/i, 1],
+  [/\bbox\b/i, 1],
+];
+class WeightedEmbedder implements Embedder {
+  async embed(texts: string[]) {
+    return texts.map((t) => {
+      const v = Float32Array.from(WEIGHTED.map(([re, w]) => (re.test(t) ? w : 0) + 0.01));
+      const n = Math.hypot(...v);
+      return v.map((x) => x / n);
+    });
+  }
+}
+
+test("memory: paraphrases of one fact recall it first, though many memories share a common word with them", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "dpi-memory-"));
+  const m = MemoryStore.open(join(dir, "memory.sqlite"), new WeightedEmbedder());
+  try {
+    m.add({ kind: "fact", text: "The workstation has an RTX 3080 Ti." });
+    for (const text of [
+      "The box has a 2 TB NVMe drive.",
+      "The box has 64 GB of RAM.",
+      "The box fan gets loud under load.",
+      "The box has a spare SD card in its slot.",
+      "The box sits in the closet.",
+      "The box restarts every Sunday night.",
+      "The box is plugged into a UPS.",
+      "The box hostname is oracle.",
+      "Backups of the box go to Backblaze.",
+      "Tailscale reaches the box from the laptop.",
+      "Hermes keeps its files on the box.",
+      "Bags runs on the box.",
+    ])
+      m.add({ kind: "fact", text });
+    while (m.pendingEmbeddings() > 0) await m.backfill();
+    for (const q of [
+      "which graphics card is in the box",
+      "what GPU does the box have",
+      "what video card is installed in the box",
+      "how much VRAM is in the box",
+    ]) {
+      assert.ok(m.search(q, { limit: 50 }).length >= 12, `keyword hits on "box" alone: ${q}`);
+      assert.match((await m.recall(q, { limit: 8 }))[0]?.text ?? "", /RTX 3080 Ti/, q);
+    }
+    // Keywords still decide among memories that are semantically alike.
+    assert.match((await m.recall("where is the SD card", { limit: 1 }))[0].text, /spare SD card/);
+  } finally {
+    m.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
