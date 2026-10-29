@@ -270,6 +270,9 @@ export class MemoryStore {
       return keyword.slice(0, limit);
     }
     this.scheduleBackfill(0);
+    // Memories stored moments ago have no vector yet; embed a small backlog now so they rank on both lists.
+    const pending = this.pendingEmbeddings();
+    if (pending > 0 && pending <= 64) await this.backfill().catch(() => 0);
     const kinds = opts.kinds?.length ? new Set(opts.kinds) : undefined;
     const semantic: [number, number][] = [];
     for (const [id, [kind, v]] of this.loadVectors()) if (!kinds || kinds.has(kind)) semantic.push([id, dot(q, v)]);

@@ -152,3 +152,18 @@ test("memory: semantic recall finds memories that share no words with the questi
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("memory: a memory recalled right after it is stored ranks first, before its vector exists", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "dpi-memory-"));
+  const m = MemoryStore.open(join(dir, "memory.sqlite"), new FakeEmbedder());
+  try {
+    for (let i = 0; i < 30; i++) m.add({ kind: "fact", text: `GPU card note ${i} about graphics and verification.` });
+    while (m.pendingEmbeddings() > 0) await m.backfill();
+    m.add({ kind: "fact", text: "Verification marker q7x9z is temporary." });
+    const found = await m.recall("verification marker q7x9z", { limit: 10 });
+    assert.match(found[0]?.text ?? "", /q7x9z/);
+  } finally {
+    m.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
