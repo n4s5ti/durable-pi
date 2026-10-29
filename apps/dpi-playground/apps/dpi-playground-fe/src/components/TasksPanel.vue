@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
+import { TASKS_TAB } from "../client/tab-templates";
+import UiView from "./UiView.vue";
 import {
   Activity,
   Bot,
@@ -30,6 +32,10 @@ import {
   startJob,
   typicalTime,
 } from "../client/jobs";
+
+/** Generative UI pilot: show the template version of this tab instead of the hand-written one. */
+const templated = ref(localStorage.getItem("dpi.tasks-template") === "1");
+watch(templated, (on) => localStorage.setItem("dpi.tasks-template", on ? "1" : "0"));
 
 const error = ref("");
 const stopping = ref(false);
@@ -130,7 +136,10 @@ const outcomes = computed(() =>
     <div class="panel-heading">
       <h2>Tasks</h2>
       <span class="tag">{{ tasks.length }} active</span>
+      <label class="tasks-template-toggle"><input v-model="templated" type="checkbox" />Template view</label>
     </div>
+    <UiView v-if="templated" :node="TASKS_TAB" />
+    <template v-else>
     <p v-if="error" class="message-error" role="alert">{{ error }}</p>
 
     <section class="task-section" aria-label="Durable jobs">
@@ -261,5 +270,6 @@ const outcomes = computed(() =>
         <pre>{{ JSON.stringify(inspection, null, 2) }}</pre>
       </details>
     </details>
+    </template>
   </div>
 </template>

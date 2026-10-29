@@ -12,6 +12,9 @@ export interface BackendConfig {
   home: string;
   envFile: string;
   dataDir: string;
+  /** pi-ai credential file. DPI_AUTH_FILE lets a second device on this machine share one OAuth login instead of
+   * copying it: a copy would rotate its own refresh token and sign the other device out. */
+  authFile: string;
   startDirs: string[];
   provider: "openrouter" | "faux";
   token: string;
@@ -37,6 +40,7 @@ export function loadConfig(argv = process.argv.slice(2), env = process.env): Bac
     home,
     envFile,
     dataDir: resolve(expand(flag("--data-dir", env.DPI_DATA_DIR ?? join(home, "backend")))),
+    authFile: resolve(expand(env.DPI_AUTH_FILE ?? join(home, "auth.json"))),
     startDirs: flag("--start-dirs", env.DPI_START_DIRS ?? "~/dpi-work")
       .split(":")
       .filter(Boolean)

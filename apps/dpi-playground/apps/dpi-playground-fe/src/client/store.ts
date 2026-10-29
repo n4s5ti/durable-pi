@@ -28,6 +28,26 @@ const uiLoaded = ref(false);
 export const deviceId = computed(() => selected.value?.deviceId);
 export const device = computed(() => network.devices.value.find((d) => d.id === deviceId.value));
 export const online = computed(() => device.value?.status === "online");
+/**
+ * The selected device was online since it was selected. A restart (offline or checking) then keeps the
+ * workspace up and marks only the connection badge; a device that needs a fix (token, identity, API
+ * version) or never answered shows the offline panel.
+ */
+const seenOnline = ref<string>();
+watch(
+  [deviceId, online],
+  ([id, on]) => {
+    if (on) seenOnline.value = id;
+    else if (seenOnline.value !== id) seenOnline.value = undefined;
+  },
+  { immediate: true },
+);
+export const workspaceUp = computed(
+  () =>
+    online.value ||
+    (seenOnline.value === deviceId.value &&
+      (device.value?.status === "offline" || device.value?.status === "checking")),
+);
 export const sessionTarget = computed(() =>
   selected.value
     ? { deviceId: selected.value.deviceId, sessionId: selected.value.sessionId }
@@ -216,6 +236,25 @@ export const busy = computed(
     tasks.value.some((t) => !t.effectiveBackground && t.conversationId === selected.value?.agentId),
 );
 export const usage = computed(() => sumUsage(agentState.value.usage));
+
+// The agent's reload tool bumps `ext.reload`. The first value seen for an agent is the baseline; a
+// later change reloads the page so new playground code takes effect.
+const reloadSeen = new Map<string, number>();
+watch(
+  () =>
+    [
+      selected.value && `${selected.value.deviceId}/${selected.value.sessionId}/${selected.value.agentId}`,
+      agentState.value.docs["ext.reload"] as { n?: number } | undefined,
+    ] as const,
+  ([key, doc]) => {
+    // The doc arrives as {} until the tool first runs; that counts as 0.
+    if (!key || !doc) return;
+    const n = doc.n ?? 0;
+    const seen = reloadSeen.get(key);
+    if (seen === undefined) reloadSeen.set(key, n);
+    else if (seen !== n) location.reload();
+  },
+);
 export const currentModel = computed(() => {
   const m = agentState.value.agent.model;
   return models.value.find((x) => x.provider === m?.provider && x.id === m?.modelId);
@@ -245,10 +284,16 @@ export const ui = reactive({
   drawer: false,
   /** Narrow screens: the inspector opens over the chat instead of taking a column. */
   inspectorOverlay: false,
-  tab: "session",
+  /** The inspector tab, kept across reloads in this browser; Canvas by default. */
+  tab: localStorage.getItem("dpi.inspector-tab") || "canvas",
   composer: "",
   dialog: undefined as Dialog | undefined,
 });
+
+watch(
+  () => ui.tab,
+  (t) => localStorage.setItem("dpi.inspector-tab", t),
+);
 
 export type Dialog =
   | { kind: "new-session"; deviceId?: string }

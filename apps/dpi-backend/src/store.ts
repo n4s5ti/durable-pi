@@ -1,4 +1,5 @@
 import { SharedState } from "./shared-state.js";
+import { MemoryStore, OllamaEmbedder } from "./memory.js";
 import type { StateChange } from "../../dpi-sdk/src/app-state.js";
 import type {
   AgentDetail,
@@ -65,6 +66,8 @@ import { ADDON_INFO, createAddons, PROMPTS, PromptChecklist, type Addons } from 
 import { UiViews, viewsOf } from "./ui-tools.js";
 import { buildPrefabs, checkOpenRouter, type DeviceFacts, type ProviderFacts } from "./prefabs.js";
 import type { UiView } from "../../dpi-sdk/src/ui-spec.js";
+import { TodoList } from "./toolkit.js";
+import { RELOAD_DOC, ReloadSignal } from "./reload.js";
 import { JOB_RUNS_DOC } from "../../dpi-sdk/src/jobs.js";
 
 /** The pi-durable version this backend pins, read from package.json so the reported version cannot drift from it. */
@@ -81,7 +84,16 @@ export const WRITE_TOOLS = new Set([
   "ping_on_call_engineer",
   "subagent",
   "start_session",
+  "remember",
+  "forget",
 ]);
+
+/** The oracle's hands: tools that change code or run commands directly. The oracle tool set drops these and keeps
+ * reading, research, App State and delegation, so code work goes to subagents, sessions and durable jobs. */
+export const ORACLE_REMOVED = new Set(["bash", "write", "edit"]);
+
+export const TOOL_SETS = ["all", "oracle", "readOnly"] as const;
+export type ToolSet = (typeof TOOL_SETS)[number];
 
 export type SessionRow = {
   id: string;
@@ -105,7 +117,7 @@ export interface StoreOptions {
 /** Agent documents a client may read or stream, by kind. */
 /** apps/dpi-backend/src → the checkout root. */
 const CODE_DIR = resolve(import.meta.dirname, "../../..");
-const AGENT_DOCS = { [JOB_RUNS_DOC]: JobRuns, "demo.workspace": Workspace } as const;
+const AGENT_DOCS = { [JOB_RUNS_DOC]: JobRuns, "demo.workspace": Workspace, "toolkit.todo": TodoList, [RELOAD_DOC]: ReloadSignal } as const;
 export const AGENT_DOC_KINDS = Object.keys(AGENT_DOCS);
 export const DEVICE_DOC_KINDS = ["app.shared-state"];
 
@@ -170,6 +182,8 @@ export class Store {
   readonly catalog: DatabaseSync;
   readonly startedAt = Date.now();
   shared!: SharedState;
+  /** DPI's long-term memory, device-wide (memory.ts). */
+  memory!: MemoryStore;
   uid!: string;
   modelList: ModelInfo[] = [];
   private credentialStore?: FileCredentialStore;
@@ -192,6 +206,9 @@ export class Store {
   }
   get sharedStatePath() {
     return join(this.options.dataDir, "app-state.sqlite");
+  }
+  get memoryPath() {
+    return join(this.options.dataDir, "memory.sqlite");
   }
   get sessionsDir() {
     return join(this.options.dataDir, "sessions");
@@ -260,6 +277,11 @@ export class Store {
     try {
       store.unlockShared = lockFile(`${store.sharedStatePath}.lock`);
       store.shared = await SharedState.open(store.sharedStatePath);
+      // Semantic recall embeds with local Ollama; off for the faux provider (tests) or with DPI_EMBED=off.
+      store.memory = MemoryStore.open(
+        store.memoryPath,
+        options.provider === "faux" || process.env.DPI_EMBED === "off" ? undefined : new OllamaEmbedder(),
+      );
       store.shared.harness.subscribeCommits(() => store.notify());
       for (const row of store.list()) {
         try {
@@ -598,7 +620,12 @@ export class Store {
       const playground = createPlayground(this.shared, row.id, this.spawnSession, jobs);
       registry.install(playground);
       // Custom extensions are installed but not selected: an agent turns them on in its own selection.
-      const addons = createAddons({ offline: this.options.provider === "faux", shared: this.shared, prefabs: () => this.prefabs() });
+      const addons = createAddons({
+        offline: this.options.provider === "faux",
+        shared: this.shared,
+        memory: this.memory,
+        prefabs: () => this.prefabs(),
+      });
       for (const extension of addons.list) registry.install(extension);
       const harness = await Harness.open(
         await openNodeSqliteStorage(row.dbPath),
@@ -788,6 +815,13 @@ export class Store {
   async agentDetail(row: SessionRow, c: Conversation): Promise<AgentDetail> {
     const { agent, all, offered } = await this.toolsOf(c);
     const writers = all.filter((t) => WRITE_TOOLS.has(t.name));
+    const readOnly = writers.length > 0 && writers.every((t) => !offered.has(t.name));
+    const hands = all.filter((t) => ORACLE_REMOVED.has(t.name));
+    const toolSet: ToolSet = readOnly
+      ? "readOnly"
+      : hands.length > 0 && hands.every((t) => !offered.has(t.name))
+        ? "oracle"
+        : "all";
     return {
       ...(await this.agentSummary(row, c)),
       sessionId: row.id,
@@ -796,7 +830,8 @@ export class Store {
         thinkingLevel: agent.thinkingLevel as ThinkingLevel | undefined,
         instructions: agent.instructions,
         cwd: agent.cwd,
-        readOnly: writers.length > 0 && writers.every((t) => !offered.has(t.name)),
+        readOnly,
+        toolSet,
       },
       tools: all.map((t) => ({
         name: t.name,
@@ -868,13 +903,19 @@ export class Store {
       cwd = (await this.browse(body.cwd)).path;
     }
     if (body.readOnly !== undefined && typeof body.readOnly !== "boolean") throw invalid("readOnly must be a boolean");
-    // Read only filters the agent's tools: the model is never offered the ones that create, update or delete.
-    const tools =
-      body.readOnly === true
-        ? { tools: { remove: (await this.toolsOf(c)).all.filter((t) => WRITE_TOOLS.has(t.name)) } }
-        : body.readOnly === false
-          ? { tools: null }
-          : {};
+    if (body.toolSet !== undefined && !TOOL_SETS.includes(body.toolSet as ToolSet))
+      throw invalid(`toolSet must be one of ${TOOL_SETS.join(", ")}`);
+    // A tool set filters the agent's tools: read only drops every tool that creates, updates or deletes; oracle drops
+    // only the direct shell and file edits. readOnly is the older boolean form of the same choice.
+    const set: ToolSet | undefined =
+      (body.toolSet as ToolSet | undefined) ??
+      (body.readOnly === true ? "readOnly" : body.readOnly === false ? "all" : undefined);
+    const drop = set === "readOnly" ? WRITE_TOOLS : set === "oracle" ? ORACLE_REMOVED : undefined;
+    const tools = drop
+      ? { tools: { remove: (await this.toolsOf(c)).all.filter((t) => drop.has(t.name)) } }
+      : set === "all"
+        ? { tools: null }
+        : {};
     await c.configure(
       {
         ...tools,
@@ -1344,14 +1385,16 @@ export class Store {
       undefined,
       typeof body.expectedRevision === "number" ? body.expectedRevision : undefined,
     );
-    await c.commit(
-      (tx) =>
-        tx.appendEntry(c.id, {
-          kind: "demo.state-change",
-          data: { text: `Shared App State: ${change.operation} ${change.path || "/"}` },
-        }),
-      ctx,
-    );
+    // Canvas inputs save as the user types; `quiet` keeps those saves out of the transcript.
+    if (body.quiet !== true)
+      await c.commit(
+        (tx) =>
+          tx.appendEntry(c.id, {
+            kind: "demo.state-change",
+            data: { text: `Shared App State: ${change.operation} ${change.path || "/"}` },
+          }),
+        ctx,
+      );
     return { ok: true as const, ...(await this.deviceDoc("app.shared-state")) };
   }
 
@@ -1416,6 +1459,7 @@ export class Store {
     }
     this.opened.clear();
     await this.shared?.close();
+    this.memory?.close();
     this.unlockShared?.();
     this.catalog.close();
     this.unlockCatalog();

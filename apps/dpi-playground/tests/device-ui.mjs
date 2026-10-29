@@ -77,6 +77,7 @@ try {
   const other =
     info.models.find((m) => m.id !== info.defaultModel && /flash|luna/i.test(m.name)) ??
     info.models[0];
+  await tab("Session");
   await page.locator(".model-button").click();
   await page.getByLabel("Search models").fill(other.name);
   await page.locator(".model-list button").filter({ hasText: other.name }).first().click();

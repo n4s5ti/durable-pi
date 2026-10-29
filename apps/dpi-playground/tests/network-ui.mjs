@@ -216,6 +216,7 @@ try {
   pass("roots & forks picker switches agents");
 
   // Rename session (inspector) and agent (header).
+  await tab("Session");
   await page.getByRole("button", { name: "Rename session", exact: true }).click();
   await page.getByLabel("Session name").fill("Renamed B");
   await page.getByRole("button", { name: "Save name" }).click();
@@ -258,7 +259,7 @@ try {
 
   // Extensions: custom harness capabilities turn on and off per agent and apply from the next request.
   await tab("Extend");
-  await expect(page.locator(".ext-card")).toHaveCount(3);
+  await expect(page.locator(".ext-card")).toHaveCount(6);
   // New sessions start with the toolkit on.
   await expect(page.getByRole("switch", { name: "Toolkit" })).toHaveAttribute("aria-checked", "true");
   const jevSwitch = page.getByRole("switch", { name: "Jev damage control" });
@@ -442,12 +443,18 @@ try {
   await page.keyboard.press("Enter");
   pass("tree keyboard navigation");
 
-  // Offline: kill box-b → dimmed cached tree + offline panel; restart → recovers on its own.
+  // Offline: kill box-b → dimmed cached tree, the workspace stays up and only the badge says
+  // Disconnected; restart → recovers on its own.
   const agentKey = selectedKey;
   await page.locator(`.tree-row[data-key="${agentKey}"]`).click();
+  await expect(chat().locator(".markdown").filter({ hasText: "Echo: from tab one" })).toBeVisible({
+    timeout: 15000,
+  });
   await stop(b);
   await expect(row("box-b").locator(".dot.off")).toBeVisible({ timeout: 20000 });
-  await expect(page.locator(".offline-panel")).toContainText("box-b is offline");
+  await expect(page.locator(".connection")).toHaveText("Disconnected");
+  await expect(page.locator(".offline-panel")).toHaveCount(0);
+  await expect(chat().locator(".markdown").filter({ hasText: "Echo: from tab one" })).toBeVisible();
   await expect(page.locator(`.tree-row[data-key="${agentKey}"]`)).toHaveClass(/stale/);
   b = await backend("box-b", portB, tokenB);
   await expect(row("box-b").locator(".dot.on")).toBeVisible({ timeout: 40000 });
@@ -455,7 +462,8 @@ try {
   await expect(chat().locator(".markdown").filter({ hasText: "Echo: from tab one" })).toBeVisible({
     timeout: 15000,
   });
-  pass("offline panel, cached tree, automatic recovery");
+  await expect(page.locator(".connection")).toHaveText("Connected");
+  pass("device restart keeps the workspace, badge only, automatic recovery");
 
   // Token rejected → the offline panel shows the terminal fix; Check now recovers.
   await register("box-b", "z".repeat(40));

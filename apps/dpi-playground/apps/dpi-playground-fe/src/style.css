@@ -2762,3 +2762,41 @@ textarea::placeholder {
     justify-content: flex-start;
   }
 }
+.todo-widget {
+  padding: 10px 14px 9px;
+  border-bottom: 1px solid #513d3f;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #f2eeee;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.todo-widget .tw-line {
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.todo-widget .tw-line:not(:first-child):not(.tw-phase) {
+  padding-left: 2ch;
+}
+.todo-widget .tw-phase {
+  padding-left: 2ch;
+  margin-top: 2px;
+}
+.todo-widget .tw-accent {
+  color: var(--accent);
+}
+.todo-widget .tw-dim {
+  color: #856669;
+}
+.todo-widget .tw-success {
+  color: #6fcf97;
+}
+.todo-widget s {
+  text-decoration-color: #856669;
+}
+.todo-widget .tw-success {
+  font-variant-emoji: text;
+  font-family: "DejaVu Sans Mono", "IBM Plex Mono", monospace;
+}
