@@ -1,5 +1,5 @@
 import { SharedState } from "./shared-state.js";
-import { MemoryStore } from "./memory.js";
+import { MemoryStore, OllamaEmbedder } from "./memory.js";
 import type { StateChange } from "../../dpi-sdk/src/app-state.js";
 import type {
   AgentDetail,
@@ -270,7 +270,11 @@ export class Store {
     try {
       store.unlockShared = lockFile(`${store.sharedStatePath}.lock`);
       store.shared = await SharedState.open(store.sharedStatePath);
-      store.memory = MemoryStore.open(store.memoryPath);
+      // Semantic recall embeds with local Ollama; off for the faux provider (tests) or with DPI_EMBED=off.
+      store.memory = MemoryStore.open(
+        store.memoryPath,
+        options.provider === "faux" || process.env.DPI_EMBED === "off" ? undefined : new OllamaEmbedder(),
+      );
       store.shared.harness.subscribeCommits(() => store.notify());
       for (const row of store.list()) {
         try {

@@ -92,10 +92,66 @@ const toMemory = (r: Row): Memory => ({
   active: r.active === 1,
 });
 
-export class MemoryStore {
-  private constructor(private readonly db: DatabaseSync) {}
+/** Turns text into vectors for semantic recall. Documents and queries may be embedded differently. */
+export interface Embedder {
+  embed(texts: string[], as: "document" | "query"): Promise<Float32Array[]>;
+}
 
-  static open(path: string) {
+/** Ollama /api/embed (default nomic-embed-text, which wants search_document: / search_query: prefixes). */
+export class OllamaEmbedder implements Embedder {
+  constructor(
+    readonly url = process.env.DPI_EMBED_URL || "http://127.0.0.1:11434",
+    readonly model = process.env.DPI_EMBED_MODEL || "nomic-embed-text:latest",
+    readonly timeoutMs = 60_000,
+  ) {}
+
+  async embed(texts: string[], as: "document" | "query") {
+    const prefix = this.model.startsWith("nomic-embed-text") ? (as === "query" ? "search_query: " : "search_document: ") : "";
+    const res = await fetch(`${this.url.replace(/\/$/, "")}/api/embed`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: this.model, input: texts.map((t) => prefix + t.slice(0, 6000)), keep_alive: "30m" }),
+      signal: AbortSignal.timeout(as === "query" ? Math.min(this.timeoutMs, 5_000) : this.timeoutMs),
+    });
+    if (!res.ok) throw Error(`embed ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const body = (await res.json()) as { embeddings?: number[][] };
+    if (!body.embeddings || body.embeddings.length !== texts.length) throw Error("embed returned the wrong number of vectors");
+    return body.embeddings.map(normalized);
+  }
+}
+
+function normalized(v: ArrayLike<number>) {
+  const out = Float32Array.from(v);
+  let norm = 0;
+  for (const x of out) norm += x * x;
+  norm = Math.sqrt(norm) || 1;
+  for (let i = 0; i < out.length; i++) out[i] /= norm;
+  return out;
+}
+
+const dot = (a: Float32Array, b: Float32Array) => {
+  let s = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) s += a[i] * b[i];
+  return s;
+};
+
+const RRF_K = 60;
+const CANDIDATES = 50;
+
+export class MemoryStore {
+  /** Active memories' vectors, loaded once and kept current: id -> [kind, vector]. */
+  private vectors?: Map<number, [MemoryKind, Float32Array]>;
+  private backfillTimer?: NodeJS.Timeout;
+  private backfilling = false;
+  lastEmbedError?: string;
+
+  private constructor(
+    private readonly db: DatabaseSync,
+    readonly embedder?: Embedder,
+  ) {}
+
+  static open(path: string, embedder?: Embedder) {
     // Memories are private: create the file owner-only before SQLite opens it (its -wal and -shm follow).
     if (!existsSync(path)) closeSync(openSync(path, "a", 0o600));
     chmodSync(path, 0o600);
@@ -124,11 +180,105 @@ export class MemoryStore {
         INSERT INTO memories_fts(memories_fts, rowid, text, tags) VALUES ('delete', old.id, old.text, old.tags);
       END;
     `);
-    return new MemoryStore(db);
+    const columns = (db.prepare("PRAGMA table_info(memories)").all() as { name: string }[]).map((c) => c.name);
+    if (!columns.includes("embedding")) db.exec("ALTER TABLE memories ADD COLUMN embedding BLOB");
+    const store = new MemoryStore(db, embedder);
+    if (embedder) store.scheduleBackfill(0);
+    return store;
   }
 
   close() {
+    clearTimeout(this.backfillTimer);
+    this.backfillTimer = undefined;
     this.db.close();
+  }
+
+  /** Memories still waiting for a vector. */
+  pendingEmbeddings() {
+    return (this.db.prepare("SELECT count(*) AS n FROM memories WHERE active = 1 AND embedding IS NULL").get() as { n: number }).n;
+  }
+
+  private scheduleBackfill(delayMs: number) {
+    if (!this.embedder || this.backfillTimer) return;
+    this.backfillTimer = setTimeout(() => {
+      this.backfillTimer = undefined;
+      void this.backfill().then(
+        (n) => this.scheduleBackfill(n > 0 ? 0 : 30_000),
+        (e) => {
+          this.lastEmbedError = e instanceof Error ? e.message : String(e);
+          this.scheduleBackfill(30_000);
+        },
+      );
+    }, delayMs);
+    this.backfillTimer.unref?.();
+  }
+
+  /** Embed up to `batch` memories that have no vector yet; returns how many it embedded. */
+  async backfill(batch = 64): Promise<number> {
+    if (!this.embedder || this.backfilling) return 0;
+    this.backfilling = true;
+    try {
+      const rows = this.db
+        .prepare("SELECT id, kind, text, tags FROM memories WHERE active = 1 AND embedding IS NULL ORDER BY id LIMIT ?")
+        .all(batch) as { id: number; kind: MemoryKind; text: string; tags: string }[];
+      if (!rows.length) return 0;
+      const vectors = await this.embedder.embed(rows.map((r) => r.text), "document");
+      const update = this.db.prepare("UPDATE memories SET embedding = ? WHERE id = ?");
+      this.db.exec("BEGIN");
+      try {
+        rows.forEach((r, i) => update.run(new Uint8Array(vectors[i].buffer), r.id));
+        this.db.exec("COMMIT");
+      } catch (e) {
+        this.db.exec("ROLLBACK");
+        throw e;
+      }
+      rows.forEach((r, i) => this.vectors?.set(r.id, [r.kind, vectors[i]]));
+      this.lastEmbedError = undefined;
+      return rows.length;
+    } finally {
+      this.backfilling = false;
+    }
+  }
+
+  private loadVectors() {
+    if (this.vectors) return this.vectors;
+    const map = new Map<number, [MemoryKind, Float32Array]>();
+    for (const r of this.db.prepare("SELECT id, kind, embedding FROM memories WHERE active = 1 AND embedding IS NOT NULL").all() as {
+      id: number;
+      kind: MemoryKind;
+      embedding: Uint8Array;
+    }[]) {
+      const bytes = r.embedding;
+      map.set(r.id, [r.kind, new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4)]);
+    }
+    return (this.vectors = map);
+  }
+
+  /**
+   * Semantic and keyword recall fused by reciprocal rank: the best of both lists rise, either alone still counts.
+   * Without an embedder, or when the query cannot be embedded in time, it is the keyword search.
+   */
+  async recall(query: string, opts: { kinds?: MemoryKind[]; limit?: number } = {}): Promise<Memory[]> {
+    const limit = Math.min(100, Math.max(1, Math.floor(opts.limit ?? 10)));
+    const keyword = this.search(query, { kinds: opts.kinds, limit: CANDIDATES });
+    if (!this.embedder || !query.trim()) return keyword.slice(0, limit);
+    let q: Float32Array;
+    try {
+      [q] = await this.embedder.embed([query.slice(0, 2000)], "query");
+    } catch (e) {
+      this.lastEmbedError = e instanceof Error ? e.message : String(e);
+      return keyword.slice(0, limit);
+    }
+    this.scheduleBackfill(0);
+    const kinds = opts.kinds?.length ? new Set(opts.kinds) : undefined;
+    const semantic: [number, number][] = [];
+    for (const [id, [kind, v]] of this.loadVectors()) if (!kinds || kinds.has(kind)) semantic.push([id, dot(q, v)]);
+    semantic.sort((a, b) => b[1] - a[1]);
+    const score = new Map<number, number>();
+    semantic.slice(0, CANDIDATES).forEach(([id], i) => score.set(id, (score.get(id) ?? 0) + 1 / (RRF_K + i + 1)));
+    keyword.forEach((m, i) => score.set(m.id, (score.get(m.id) ?? 0) + 1 / (RRF_K + i + 1)));
+    const ranked = [...score.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit);
+    return ranked.map(([id]) => this.get(id)).filter((m): m is Memory => !!m && m.active);
   }
 
   /** Store one memory; returns the existing one for a known originId or an identical active memory. */
@@ -145,6 +295,7 @@ export class MemoryStore {
         "INSERT INTO memories(kind, text, source, tags, occurredAt, createdAt, originId) VALUES (?,?,?,?,?,?,?) RETURNING *",
       )
       .get(m.kind, m.text, m.source!, JSON.stringify(m.tags ?? []), m.occurredAt ?? null, new Date().toISOString(), m.originId ?? null) as Row;
+    this.scheduleBackfill(0);
     return { memory: toMemory(row), created: true };
   }
 
@@ -213,6 +364,7 @@ export class MemoryStore {
       .prepare("UPDATE memories SET active = 0, forgottenReason = ? WHERE id = ? RETURNING *")
       .get(reason.slice(0, 500) || "forgotten", id) as Row | undefined;
     if (!row) throw Error(`No memory ${id}`);
+    this.vectors?.delete(id);
     return toMemory(row);
   }
 
@@ -231,7 +383,12 @@ export class MemoryStore {
         total += r.n;
       } else forgotten += r.n;
     }
-    return { total, forgotten, byKind };
+    return {
+      total,
+      forgotten,
+      byKind,
+      ...(this.embedder ? { pendingEmbeddings: this.pendingEmbeddings(), ...(this.lastEmbedError ? { embedError: this.lastEmbedError } : {}) } : {}),
+    };
   }
 }
 
@@ -285,7 +442,7 @@ export function createMemoryExtension(memory: MemoryStore, opts: { recallLimit?:
     replay: "safe",
     execute: async (args) => {
       const a = args as { query: string; kind?: MemoryKind; limit?: number };
-      const found = memory.search(a.query, { kinds: a.kind ? [a.kind] : undefined, limit: Math.min(50, a.limit ?? 10) });
+      const found = await memory.recall(a.query, { kinds: a.kind ? [a.kind] : undefined, limit: Math.min(50, a.limit ?? 10) });
       return text(found.map(line).join("\n") || "No matching memories.");
     },
   });
@@ -335,7 +492,7 @@ export function createMemoryExtension(memory: MemoryStore, opts: { recallLimit?:
             let block = "";
             if (user) {
               try {
-                const found = memory.search(user, { kinds: ["fact", "preference", "event", "observation"], limit: opts.recallLimit ?? 8 });
+                const found = await memory.recall(user, { kinds: ["fact", "preference", "event", "observation"], limit: opts.recallLimit ?? 8 });
                 if (found.length) block = `${RECALL_PREAMBLE}\n\n${found.map((m) => `- ${line(m)}`).join("\n")}`;
               } catch (e) {
                 console.error("[memory] recall failed, run continues:", e instanceof Error ? e.message : e);

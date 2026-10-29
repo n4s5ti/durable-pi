@@ -63,10 +63,13 @@ export function v1(store: Store) {
   // ---------------------------------------------------------- memory (memory.ts)
   const memoryKinds = (value: unknown) =>
     typeof value === "string" && value ? (value.split(",") as MemoryKind[]).filter((k) => MEMORY_KINDS.includes(k)) : undefined;
-  r.get("/memory", (req, res) => {
-    const limit = req.query.limit === undefined ? 10 : int(req.query.limit, "limit");
-    res.json({ items: store.memory.search(String(req.query.query ?? ""), { kinds: memoryKinds(req.query.kind), limit }) });
-  });
+  r.get(
+    "/memory",
+    route(async (req, res) => {
+      const limit = req.query.limit === undefined ? 10 : int(req.query.limit, "limit");
+      res.json({ items: await store.memory.recall(String(req.query.query ?? ""), { kinds: memoryKinds(req.query.kind), limit }) });
+    }),
+  );
   r.get("/memory/rules", (_req, res) => res.json({ items: store.memory.rules() }));
   r.get("/memory/stats", (_req, res) => res.json(store.memory.stats()));
   r.get("/memory/:id", (req, res) => {

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ftsQuery, MemoryStore, rulesBlock } from "../src/memory.js";
+import { ftsQuery, MemoryStore, rulesBlock, type Embedder } from "../src/memory.js";
 import { faux, tempStore } from "./helpers.js";
 
 const withStore = (fn: (m: MemoryStore, dir: string) => void) => {
@@ -110,5 +110,45 @@ test("memory extension: remember, recall and forget as tools; recall and rules r
   } finally {
     await store.close();
     await t.cleanup();
+  }
+});
+
+// A tiny deterministic embedder: each concept is one dimension, so "graphics card" and "RTX GPU" meet.
+const CONCEPTS: RegExp[] = [/gpu|graphics|rtx|card|vram/i, /cpu|processor|i9|cores/i, /voice|bagley|speech|rvc/i, /sudo|password|pam/i];
+class FakeEmbedder implements Embedder {
+  calls = 0;
+  fail = false;
+  async embed(texts: string[]) {
+    this.calls++;
+    if (this.fail) throw Error("embedder down");
+    return texts.map((t) => {
+      const v = Float32Array.from(CONCEPTS.map((c) => (c.test(t) ? 1 : 0)), (x) => x + 0.01);
+      const n = Math.hypot(...v);
+      return v.map((x) => x / n);
+    });
+  }
+}
+
+test("memory: semantic recall finds memories that share no words with the question, and falls back to keywords", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "dpi-memory-"));
+  const embedder = new FakeEmbedder();
+  const m = MemoryStore.open(join(dir, "memory.sqlite"), embedder);
+  try {
+    m.add({ kind: "fact", text: "The workstation has an RTX 3080 Ti." });
+    m.add({ kind: "fact", text: "Bagley speaks through Kokoro and RVC." });
+    m.add({ kind: "fact", text: "Sudo uses a global timestamp." });
+    while (m.pendingEmbeddings() > 0) await m.backfill();
+    assert.equal(m.search("which graphics card do I own").length, 0, "no shared words");
+    const found = await m.recall("which graphics card do I own", { limit: 1 });
+    assert.match(found[0].text, /RTX 3080 Ti/);
+    assert.match((await m.recall("how does the speech sound", { limit: 1 }))[0].text, /Bagley/);
+    m.forget(found[0].id, "test");
+    assert.doesNotMatch((await m.recall("graphics card", { limit: 1 }))[0]?.text ?? "", /RTX/);
+    embedder.fail = true;
+    assert.match((await m.recall("sudo timestamp"))[0].text, /Sudo/, "keyword recall when the embedder is down");
+    assert.equal(m.stats().embedError, "embedder down");
+  } finally {
+    m.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
