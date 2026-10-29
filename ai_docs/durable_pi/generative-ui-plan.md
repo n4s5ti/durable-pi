@@ -31,6 +31,11 @@ generates views in the gaps between them. Build on the current UI. Do not rebuil
 - **Templates and generated views:** inspector tabs (State, Tasks, Tools, Extend, Session) and the
   Canvas, rendered from ui-spec views and templates that the user or the agent can edit at runtime.
 
+- **Direction (2026-10-29): the Canvas absorbs the inspector tabs.** Over time every tab (Session
+  and context, State, Tasks, Tools, Extend) becomes a card on the Canvas, built from a template.
+  The tab strip goes away once the last tab has moved. The Tasks tab template (`TASKS_TAB`) is the
+  first of these cards.
+
 A greenfield rewrite only pays off if Vue or the hub is also being replaced. Otherwise it rewrites
 the cheap parts and keeps the hard ones (hub, SSE streams, store, App State sync), which already
 work.
@@ -51,8 +56,8 @@ work.
 | ---- | ---- | -------- |
 | A1 | Data bindings. text, metric, table and list read a live path (`/state/...` App State, or an agent doc such as `toolkit.todo`) instead of fixed values. `input` already binds to App State. | about 1 day |
 | A2 | Actions and repeats. A `button` component that calls a tool, an endpoint or a state write. An `each` component that repeats a child for every item in an array. | 1 to 2 days |
-| A3 | Rebuild the inspector tabs (about 1,200 lines of Vue) as templates. The hand-written components stay as a fallback until each template matches them. | 2 to 3 days |
-| A4 | User preferences. Tab order, pinned views and template overrides are stored in App State, so a tab can be reshaped by editing a template, with no rebuild. | 1 to 2 days |
+| A3 | Move each inspector tab (about 1,200 lines of Vue) onto the Canvas as a template card, one tab at a time: Tasks, State, Tools, Extend, then Session and context. The hand-written tab stays as a fallback until its card matches it. Remove the tab strip after the last one. | 2 to 3 days |
+| A4 | User preferences. Card order, pinned cards and template overrides are stored in App State, so a card can be reshaped by editing a template, with no rebuild. | 1 to 2 days |
 
 Total: about 5 to 8 days. A1 and A2 are useful on their own, because they make canvas forms and
 dashboards useful even if the rest is never done.
