@@ -136,8 +136,8 @@ const dot = (a: Float32Array, b: Float32Array) => {
   return s;
 };
 
-const RRF_K = 60;
-const CANDIDATES = 50;
+/** Share of a recall score that comes from keywords; the rest is semantic similarity. */
+const KEYWORD_WEIGHT = 0.3;
 
 export class MemoryStore {
   /** Active memories' vectors, loaded once and kept current: id -> [kind, vector]. */
@@ -255,32 +255,70 @@ export class MemoryStore {
   }
 
   /**
-   * Semantic and keyword recall fused by reciprocal rank: the best of both lists rise, either alone still counts.
-   * Without an embedder, or when the query cannot be embedded in time, it is the keyword search.
+   * How much of the query each memory covers, 0..1: the summed IDF of the query words it contains over that of
+   * all query words. A memory that only shares a common word ("box") scores near 0; one that has the rare words
+   * of the query (a name, a marker) scores near 1.
+   */
+  private keywordCoverage(query: string, kinds?: Set<MemoryKind>) {
+    const terms = ftsQuery(query).split(" OR ").filter(Boolean);
+    const coverage = new Map<number, number>();
+    if (!terms.length) return coverage;
+    const n = (this.db.prepare("SELECT count(*) AS n FROM memories WHERE active = 1").get() as { n: number }).n;
+    const hits = this.db.prepare(
+      "SELECT m.id, m.kind FROM memories_fts f JOIN memories m ON m.id = f.rowid WHERE memories_fts MATCH ? AND m.active = 1",
+    );
+    let total = 0;
+    for (const term of terms) {
+      const rows = hits.all(term) as { id: number; kind: MemoryKind }[];
+      const idf = Math.log(1 + (n - rows.length + 0.5) / (rows.length + 0.5));
+      total += idf;
+      for (const r of rows) if (!kinds || kinds.has(r.kind)) coverage.set(r.id, (coverage.get(r.id) ?? 0) + idf);
+    }
+    for (const [id, w] of coverage) coverage.set(id, total > 0 ? w / total : 0);
+    return coverage;
+  }
+
+  /**
+   * Semantic and keyword recall fused by score: cosine similarity, scaled 0..1 across the memories in scope, plus a
+   * smaller share for keyword coverage. Fusing by rank instead let any memory that matched one common query word
+   * outrank the best semantic match, since appearing on both lists beat leading one. A memory with no vector yet
+   * is ranked by its keywords alone. Without an embedder, or when the query cannot be embedded in time, it is the
+   * keyword search.
    */
   async recall(query: string, opts: { kinds?: MemoryKind[]; limit?: number } = {}): Promise<Memory[]> {
     const limit = Math.min(100, Math.max(1, Math.floor(opts.limit ?? 10)));
-    const keyword = this.search(query, { kinds: opts.kinds, limit: CANDIDATES });
-    if (!this.embedder || !query.trim()) return keyword.slice(0, limit);
+    if (!this.embedder || !query.trim()) return this.search(query, { kinds: opts.kinds, limit });
     let q: Float32Array;
     try {
       [q] = await this.embedder.embed([query.slice(0, 2000)], "query");
     } catch (e) {
       this.lastEmbedError = e instanceof Error ? e.message : String(e);
-      return keyword.slice(0, limit);
+      return this.search(query, { kinds: opts.kinds, limit });
     }
     this.scheduleBackfill(0);
-    // Memories stored moments ago have no vector yet; embed a small backlog now so they rank on both lists.
+    // Memories stored moments ago have no vector yet; embed a small backlog now so they rank on both signals.
     const pending = this.pendingEmbeddings();
     if (pending > 0 && pending <= 64) await this.backfill().catch(() => 0);
     const kinds = opts.kinds?.length ? new Set(opts.kinds) : undefined;
-    const semantic: [number, number][] = [];
-    for (const [id, [kind, v]] of this.loadVectors()) if (!kinds || kinds.has(kind)) semantic.push([id, dot(q, v)]);
-    semantic.sort((a, b) => b[1] - a[1]);
+    const semantic = new Map<number, number>();
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const [id, [kind, v]] of this.loadVectors()) {
+      if (kinds && !kinds.has(kind)) continue;
+      const sim = dot(q, v);
+      semantic.set(id, sim);
+      lo = Math.min(lo, sim);
+      hi = Math.max(hi, sim);
+    }
+    const span = hi - lo;
+    const coverage = this.keywordCoverage(query, kinds);
     const score = new Map<number, number>();
-    semantic.slice(0, CANDIDATES).forEach(([id], i) => score.set(id, (score.get(id) ?? 0) + 1 / (RRF_K + i + 1)));
-    keyword.forEach((m, i) => score.set(m.id, (score.get(m.id) ?? 0) + 1 / (RRF_K + i + 1)));
-    const ranked = [...score.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit);
+    for (const [id, sim] of semantic) {
+      const scaled = span > 1e-6 ? (sim - lo) / span : 1;
+      score.set(id, (1 - KEYWORD_WEIGHT) * scaled + KEYWORD_WEIGHT * (coverage.get(id) ?? 0));
+    }
+    for (const [id, c] of coverage) if (!semantic.has(id)) score.set(id, c);
+    const ranked = [...score.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0]).slice(0, limit);
     return ranked.map(([id]) => this.get(id)).filter((m): m is Memory => !!m && m.active);
   }
 
