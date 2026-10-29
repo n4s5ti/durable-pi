@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import { ArrowUp, ChevronDown, Clock3, Octagon, X } from "lucide-vue-next";
 import type { WhenBusy } from "@sdk/api";
 import { newId } from "../client/ids";
+import TodoBar from "./TodoBar.vue";
 import { commands, parseCommand, type SlashCommand } from "../client/commands";
 import {
   agentHandle,
@@ -128,6 +129,7 @@ function withdraw(id: number) {
       </div>
     </div>
     <div class="composer">
+      <TodoBar />
       <ul v-if="matches.length" class="slash-menu" role="listbox" aria-label="Slash commands">
         <li
           v-for="(c, i) in matches"

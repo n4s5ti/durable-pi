@@ -118,37 +118,62 @@ test("agent, session and device streams carry snapshots and deltas that reduce t
   }
 });
 
-test("openSse ends a slow viewer instead of buffering without bound", () => {
-  const writes: string[] = [];
-  let ended = false;
-  const handlers: Record<string, () => void> = {};
-  const res = {
-    writableLength: 0,
-    status() {
-      return this;
-    },
-    set() {
-      return this;
-    },
-    flushHeaders() {},
-    socket: undefined,
-    on(event: string, fn: () => void) {
-      handlers[event] = fn;
-    },
-    write(chunk: string) {
-      writes.push(chunk);
-      return true;
-    },
-    end() {
-      ended = true;
-    },
+test("openSse ends a slow viewer instead of buffering without bound", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const fake = () => {
+    const writes: string[] = [];
+    const handlers: Record<string, () => void> = {};
+    const res = {
+      writableLength: 0,
+      ended: false,
+      writes,
+      handlers,
+      status() {
+        return this;
+      },
+      set() {
+        return this;
+      },
+      flushHeaders() {},
+      socket: undefined,
+      on(event: string, fn: () => void) {
+        handlers[event] = fn;
+      },
+      once(event: string, fn: () => void) {
+        handlers[event] = fn;
+      },
+      write(chunk: string) {
+        writes.push(chunk);
+        return true;
+      },
+      end() {
+        this.ended = true;
+      },
+    };
+    return { res, sse: openSse(res as unknown as Response, { kind: "device" }) };
   };
-  const sse = openSse(res as unknown as Response, { kind: "device" });
-  assert.match(writes[0], /event: hello/);
-  res.writableLength = 3_000_000;
-  sse.send({ type: "activity", items: [] });
-  assert.equal(ended, true);
-  assert.equal(sse.closed, true);
-  sse.send({ type: "activity", items: [] });
-  assert.equal(writes.length, 1);
+
+  // One frame larger than the buffer (a long conversation's snapshot) is fine once it drains.
+  const big = fake();
+  assert.match(big.res.writes[0], /event: hello/);
+  big.res.writableLength = 3_000_000;
+  big.sse.send({ type: "activity", items: [] });
+  big.res.writableLength = 0;
+  big.res.handlers.drain();
+  t.mock.timers.tick(20_000);
+  assert.equal(big.res.ended, false);
+  assert.equal(big.sse.closed, false);
+  big.res.handlers.close(); // the viewer leaves, which stops its ping timer
+
+  // A backlog that stays over the buffer is ended, and later frames are dropped.
+  const slow = fake();
+  slow.res.writableLength = 3_000_000;
+  slow.sse.send({ type: "activity", items: [] });
+  assert.equal(slow.res.ended, false);
+  t.mock.timers.tick(10_000);
+  assert.equal(slow.res.ended, true);
+  assert.equal(slow.sse.closed, true);
+  const before = slow.res.writes.length;
+  slow.sse.send({ type: "activity", items: [] });
+  assert.equal(slow.res.writes.length, before);
 });

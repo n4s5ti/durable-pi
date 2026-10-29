@@ -78,8 +78,11 @@ const info = await client.device({ timeoutMs: 8000 }).catch((e: unknown) =>
 if (values.save && url)
   registry.upsert({ id: values.save, name: values.save, url: device.url, kind: "url", source: "ui", token: device.token });
 
-let session = sessionRef;
-if (values.new) {
+// Set by the TUI when it relaunches itself for the reload tool: reattach to the same session and agent.
+const resume = process.env.DPI_TUI_ATTACH?.split(":");
+delete process.env.DPI_TUI_ATTACH;
+let session = resume?.[0] ?? sessionRef;
+if (values.new && !resume) {
   const cwd = values.cwd ?? (await client.dirs("")).dirs[0]?.path;
   if (!cwd) fail(`${device.id} has no start dirs; pass --cwd`);
   const modelId = values.model ?? info.defaultModel;
@@ -92,4 +95,4 @@ if (values.new) {
 }
 
 const app = new App(device, client, info, registry);
-await app.open(session, agentRef);
+await app.open(session, resume?.[1] ?? agentRef);

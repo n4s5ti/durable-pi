@@ -254,3 +254,16 @@ export function sumUsage(state?: Pick<WireUsageState, "models"> | { models: Reco
 }
 
 export type { WireToolSlot };
+
+/** Drop successful calls of one tool from the transcript, for tools a client draws elsewhere (the
+ *  todo list has its own widget on the chat box). Failed calls stay so errors remain visible. */
+export function hideTool(items: readonly TranscriptItem[], name: string): TranscriptItem[] {
+  return items.flatMap((i): TranscriptItem[] => {
+    if (i.kind === "tool-result") return i.name === name && !i.isError ? [] : [i];
+    if (i.kind === "tool") return i.call.name === name && i.call.status !== "error" ? [] : [i];
+    if (i.kind !== "assistant") return [i];
+    const blocks = i.blocks.filter((b) => !(b.type === "tool" && b.call.name === name && b.call.status !== "error"));
+    if (blocks.length === i.blocks.length) return [i];
+    return blocks.length || i.streaming || i.error ? [{ ...i, blocks }] : [];
+  });
+}

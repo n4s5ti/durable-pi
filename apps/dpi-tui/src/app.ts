@@ -15,7 +15,7 @@ import {
 import { DpiClient, follow, type AgentHandle, type ConnectionState } from "../../dpi-sdk/src/client.ts";
 import { isDpiError } from "../../dpi-sdk/src/errors.ts";
 import { AgentModel, SessionModel } from "../../dpi-sdk/src/models.ts";
-import { sumUsage } from "../../dpi-sdk/src/transcript.ts";
+import { hideTool, sumUsage } from "../../dpi-sdk/src/transcript.ts";
 import {
   THINKING_LEVELS,
   type DeviceInfo,
@@ -29,6 +29,9 @@ import { COMMANDS, runCommand } from "./commands.ts";
 import { pickModel, pickSession, Prompt } from "./pickers.ts";
 import { Line, spinner, TranscriptView } from "./render.ts";
 import { c, editorTheme } from "./theme.ts";
+import { TODO_DOC, TodoWidget } from "./todo.ts";
+
+const RELOAD_DOC = "ext.reload";
 
 export interface DeviceRef {
   id: string;
@@ -55,6 +58,10 @@ export class App {
   private header = new Line("");
   private view = new TranscriptView();
   private status = new Text("", 1, 0);
+  private todo = new TodoWidget();
+  private todoTicker?: ReturnType<typeof setInterval>;
+  /** The `ext.reload` value seen first after attaching; a later change relaunches the TUI. */
+  private reloadSeen?: number;
   private editor = new Editor(this.tui, editorTheme, { paddingX: 1 });
   private footer = new Line("");
   private connection: ConnectionState | "idle" = "idle";
@@ -75,6 +82,7 @@ export class App {
         { component: this.header, basis: "auto" },
         { component: new ScrollView(this.view, { follow: "end", primary: true }), basis: 0, grow: 1, minSize: 3 },
         { component: this.status, basis: "auto", visible: () => this.statusLines().length > 0 },
+        { component: this.todo, basis: "auto", shrink: 1, visible: () => this.todo.visible() },
         { component: this.editor, basis: "auto", shrink: 1, minSize: 1 },
         { component: this.footer, basis: "auto" },
       ]),
@@ -112,11 +120,12 @@ export class App {
     this.handle = this.client.agent(sessionId, agentId);
     this.model.clear();
     this.view.reset();
+    this.reloadSeen = undefined;
     if (!sameSession) this.session.clear();
     void this.refreshSessions();
     const handle = this.handle;
     void follow(
-      (signal) => handle.events(signal),
+      (signal) => handle.events(signal, [TODO_DOC, RELOAD_DOC]),
       (frame) => this.model.apply(frame),
       (state, error) => {
         this.connection = state;
@@ -288,6 +297,7 @@ export class App {
   exit() {
     this.streams?.abort();
     clearInterval(this.ticker);
+    clearInterval(this.todoTicker);
     this.tui.stop();
     const ref = this.reattachRef();
     if (ref) {
@@ -300,6 +310,16 @@ export class App {
       );
     }
     process.exit(0);
+  }
+
+  /** Replace this process with a fresh dpi-tui on the same device, session and agent (the reload tool). */
+  private relaunch() {
+    this.streams?.abort();
+    clearInterval(this.ticker);
+    clearInterval(this.todoTicker);
+    this.tui.stop();
+    const env = { ...process.env, DPI_TUI_ATTACH: `${this.sessionId}:${this.agentId}` } as Record<string, string>;
+    process.execve!(process.execPath, [process.execPath, ...process.execArgv, ...process.argv.slice(1)], env);
   }
 
   /** Names when they resolve to exactly this session and agent, otherwise ids. */
@@ -356,7 +376,24 @@ export class App {
 
   private redraw(items = true) {
     const s = this.model.state;
-    if (items) this.view.update(s.items);
+    if (items) this.view.update(hideTool(s.items, "todo"));
+    // The doc arrives as {} until the tool first runs; that counts as 0.
+    const reloadDoc = s.docs[RELOAD_DOC] as { n?: number } | undefined;
+    if (reloadDoc) {
+      const reload = reloadDoc.n ?? 0;
+      if (this.reloadSeen === undefined) this.reloadSeen = reload;
+      else if (reload !== this.reloadSeen) return this.relaunch();
+    }
+    const spinning = this.todo.set(s.docs[TODO_DOC]);
+    if (spinning && !this.todoTicker)
+      this.todoTicker = setInterval(() => {
+        this.todo.frame++;
+        this.tui.requestRender();
+      }, 150);
+    else if (!spinning && this.todoTicker) {
+      clearInterval(this.todoTicker);
+      this.todoTicker = undefined;
+    }
     const running = s.items.some(
       (i) => (i.kind === "tool" && i.call.status === "running") || (i.kind === "assistant" && i.blocks.some((b) => b.type === "tool" && b.call.status === "running")),
     );

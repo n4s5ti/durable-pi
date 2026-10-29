@@ -140,10 +140,16 @@
   background: #ffffff0d;
 }
 /* Agent views (ui-tools): the closed catalog rendered by UiRender.vue. */
+.canvas-view {
+  overflow-y: auto;
+}
 .canvas-views {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
 }
 .canvas-view-card {
   border: 1px solid var(--line);
@@ -288,4 +294,91 @@
 .ui-table th {
   color: var(--muted);
   font-weight: 550;
+}
+/* input: a text box bound to App State */
+.ui-input {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.ui-input-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 14px;
+}
+.ui-input-label small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.ui-input input,
+.ui-input textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: #281c1d;
+  border: 1px solid #513d3f;
+  border-radius: 7px;
+  padding: 8px 10px;
+  color: #f2eeee;
+  font: inherit;
+  font-size: 14px;
+  resize: vertical;
+}
+.ui-input input:focus,
+.ui-input textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.ui-input.saving input,
+.ui-input.saving textarea {
+  border-color: var(--secondary);
+}
+.ui-input.readonly input,
+.ui-input.readonly textarea {
+  opacity: 0.7;
+}
+/* button: runs a named action */
+.ui-button {
+  align-self: flex-start;
+  background: #281c1d;
+  border: 1px solid #513d3f;
+  border-radius: 7px;
+  padding: 6px 12px;
+  color: #f2eeee;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ui-button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.ui-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.ui-button.accent {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.ui-button.urgent {
+  border-color: #ff6b6b;
+  color: #ff6b6b;
+}
+.ui-row > .ui-button {
+  flex: 0 0 auto;
+}
+.tasks-template-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+}
+.tasks-panel .ui-card .ui-card {
+  background: #241819;
+}
+.ui-row > .ui-badge {
+  flex: 0 1 auto;
+  align-self: center;
 }

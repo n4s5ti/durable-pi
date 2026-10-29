@@ -183,7 +183,7 @@ test("custom extensions: jev-damage-control blocks rm -rf only while on; system-
       JSON.stringify((await store.entries(c, undefined, 500)).items.filter((e) => e.kind === "pi.system").slice(0, 1));
 
     let ext = await store.extensionsOf(row, c);
-    assert.deepEqual(ext.extensions.map((e) => [e.name, e.enabled]), [["system-prompts", false], ["jev-damage-control", false], ["toolkit", true], ["ui-tools", false]]);
+    assert.deepEqual(ext.extensions.map((e) => [e.name, e.enabled]), [["system-prompts", false], ["jev-damage-control", false], ["toolkit", true], ["ui-tools", false], ["reload", false], ["memory", false], ["hindsight", false]]);
     assert.deepEqual(ext.builtIn.sort(), ["coding-tools", "playground"]);
     assert.deepEqual(ext.extensions[0].prompts?.map((p) => [p.id, p.enabled]), [["smart_ass_opus_fix.md", true], ["one_sentence.md", false]]);
 
@@ -210,13 +210,13 @@ test("custom extensions: jev-damage-control blocks rm -rf only while on; system-
     assert.doesNotMatch(await systemText(), /Clear, Concise, Actionable Communication/);
     // Extensions stack: turning one on keeps the other on.
     ext = await store.setExtension(row, c, { name: "jev-damage-control", enabled: true });
-    assert.deepEqual(ext.extensions.map((e) => [e.name, e.enabled]), [["system-prompts", true], ["jev-damage-control", true], ["toolkit", true], ["ui-tools", false]]);
+    assert.deepEqual(ext.extensions.map((e) => [e.name, e.enabled]), [["system-prompts", true], ["jev-damage-control", true], ["toolkit", true], ["ui-tools", false], ["reload", false], ["memory", false], ["hindsight", false]]);
     assert.deepEqual(ext.builtIn, ["coding-tools", "playground"]);
     await mkdir(join(t.work, "doomed"));
     await turn("!rm -rf doomed");
     assert.ok(existsSync(join(t.work, "doomed")));
     ext = await store.setExtension(row, c, { name: "system-prompts", enabled: false });
-    assert.deepEqual(ext.extensions.map((e) => e.enabled), [false, true, true, false]);
+    assert.deepEqual(ext.extensions.map((e) => e.enabled), [false, true, true, false, false, false, false]);
     await assert.rejects(() => store.setExtension(row, c, { name: "nope", enabled: true }), /Unknown extension/);
   } finally {
     await store.close();
@@ -252,6 +252,39 @@ test("read only: the agent is offered only tools that read; turning it off resto
     await store.configure(row, c, { readOnly: false });
     assert.ok((await offered()).includes("bash"));
     assert.equal((await store.agentDetail(row, c)).config.readOnly, false);
+  } finally {
+    await store.close();
+    await t.cleanup();
+  }
+});
+
+test("oracle tool set: delegation and state stay, direct shell and file edits leave; all restores them", async () => {
+  const t = await tempStore();
+  const store = await t.open();
+  try {
+    await mkdir(join(t.work, "kept"));
+    const session = await store.create({ name: "Oracle", cwd: t.work, model: faux });
+    const { row, h, c } = await store.resolveAgent(session.id, "main");
+    const offered = async () => (await store.agentDetail(row, c)).tools.filter((x) => x.offered).map((x) => x.name);
+    assert.equal((await store.agentDetail(row, c)).config.toolSet, "all");
+
+    assert.equal((await store.configure(row, c, { toolSet: "oracle" })).toolSet, "oracle");
+    const names = await offered();
+    for (const gone of ["bash", "write", "edit"]) assert.ok(!names.includes(gone), `${gone} is not offered`);
+    for (const kept of ["read", "subagent", "start_session", "run_durable_job", "update_state", "search_history"])
+      assert.ok(names.includes(kept), `${kept} is offered`);
+    assert.equal((await store.agentDetail(row, c)).config.readOnly, false);
+    const submission = await store.send(c, { content: "!rm -rf kept", requestId: "oracle-1" });
+    assert.equal((await store.settled(h, submission.id as number, 20000)).status, "done");
+    assert.ok(existsSync(join(t.work, "kept")), "bash never ran");
+
+    assert.equal((await store.configure(row, c, { toolSet: "readOnly" })).toolSet, "readOnly");
+    assert.equal((await store.agentDetail(row, c)).config.readOnly, true);
+    assert.equal((await store.configure(row, c, { toolSet: "oracle" })).toolSet, "oracle", "read only to oracle restores delegation");
+    assert.ok((await offered()).includes("subagent"));
+    assert.equal((await store.configure(row, c, { toolSet: "all" })).toolSet, "all");
+    assert.ok((await offered()).includes("bash"));
+    await assert.rejects(() => store.configure(row, c, { toolSet: "nope" }), /toolSet must be/);
   } finally {
     await store.close();
     await t.cleanup();

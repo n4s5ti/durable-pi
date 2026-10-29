@@ -9,6 +9,7 @@ import { AGENT_DOC_KINDS, DEVICE_DOC_KINDS, type SessionRow, type Store } from "
 import { invalid } from "./errors.js";
 
 const MAX_BUFFER = 2_000_000;
+const STALL_MS = 10_000;
 
 export interface Sse {
   send(frame: Frame): void;
@@ -33,10 +34,13 @@ export function openSse(res: Response, scope: StreamScope): Sse {
   const ping = setInterval(() => {
     if (!closed) res.write(": ping\n\n");
   }, 15_000);
+  // Set while more than MAX_BUFFER is queued; fires if the viewer has not drained it by then.
+  let stall: ReturnType<typeof setTimeout> | undefined;
   const close = () => {
     if (closed) return;
     closed = true;
     clearInterval(ping);
+    clearTimeout(stall);
     for (const fn of cleanups.splice(0)) {
       try {
         fn();
@@ -46,11 +50,20 @@ export function openSse(res: Response, scope: StreamScope): Sse {
   res.on("close", close);
   const send = (frame: Frame) => {
     if (closed) return;
-    if (res.writableLength > MAX_BUFFER) {
-      // A slow viewer reconnects to a fresh snapshot instead of buffering without bound.
-      res.end();
-      close();
-      return;
+    // A slow viewer reconnects to a fresh snapshot instead of buffering without bound. One large frame
+    // (a long conversation's snapshot) can exceed MAX_BUFFER alone, so only a backlog that stays over
+    // it for STALL_MS without draining counts as slow.
+    if (res.writableLength > MAX_BUFFER && !stall) {
+      stall = setTimeout(() => {
+        if (res.writableLength > MAX_BUFFER) {
+          res.end();
+          close();
+        }
+      }, STALL_MS);
+      res.once("drain", () => {
+        clearTimeout(stall);
+        stall = undefined;
+      });
     }
     res.write(`id: ${++seq}\nevent: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`);
   };
