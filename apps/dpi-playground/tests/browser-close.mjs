@@ -45,6 +45,8 @@ let page = await (await browser.newContext({ viewport: { width: 1440, height: 90
 try {
   await page.goto(hub);
   await expect(page.locator(".device-chip")).toHaveText(device, { timeout: 20000 });
+  // The inspector opens on Canvas by default; the model picker is on the Session tab.
+  await page.getByRole("tab", { name: "Session", exact: true }).click();
   await expect(page.locator(".model-button")).toBeVisible();
   // Model picker and a persisted thinking level.
   const other = info.models.find((m) => m.id !== model.id && /flash|luna/i.test(m.name)) ?? model;

@@ -29,6 +29,7 @@ import {
   network,
   notify,
   online,
+  workspaceUp,
   select,
   selected,
   sessionHandle,
@@ -51,6 +52,10 @@ const onlineCount = computed(
   () => network.devices.value.filter((d) => d.status === "online").length,
 );
 const creatingAgent = ref(false);
+/** Hub stream live and, with a device selected, that device online. */
+const connected = computed(
+  () => streamState.value === "live" && (!selected.value || !device.value || online.value),
+);
 
 async function newAgent() {
   const handle = sessionHandle.value;
@@ -153,10 +158,10 @@ onBeforeUnmount(() => {
         >
       </div>
       <div class="top-actions">
-        <span class="connection"
-          ><i :class="{ online: streamState === 'live' }" />{{
-            streamState === "live" ? "Connected" : "Reconnecting"
-          }}</span
+        <span
+          class="connection"
+          :title="connected ? 'Connected' : streamState !== 'live' ? 'Hub unreachable, reconnecting' : `${device?.id} is restarting or offline, reconnecting`"
+          ><i :class="{ online: connected }" />{{ connected ? "Connected" : "Disconnected" }}</span
         ><button
           class="icon-button"
           title="How this works"
@@ -209,7 +214,7 @@ onBeforeUnmount(() => {
         @pointerdown.prevent="resize"
       />
       <div v-if="ui.drawer" class="tree-backdrop" @click="ui.drawer = false" />
-      <template v-if="selected && device && online">
+      <template v-if="selected && device && workspaceUp">
         <AgentView :key="`${selected.deviceId}/${selected.sessionId}`" />
         <div
           v-if="chatFixed"
