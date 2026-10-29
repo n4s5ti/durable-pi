@@ -12,7 +12,8 @@ HERE = pathlib.Path(__file__).resolve().parent
 BASE = os.environ.get("DPI_ORACLE_URL", "http://127.0.0.1:4790")
 ENV = pathlib.Path.home() / ".dpi-oracle" / "backend.env"
 TOKEN = next(l.split("=", 1)[1].strip() for l in ENV.read_text().splitlines() if l.startswith("DPI_TOKEN="))
-MODEL = {"provider": "openrouter", "modelId": os.environ.get("ORACLE_MODEL", "anthropic/claude-opus-5.5")}
+# Direct Anthropic through the Claude subscription OAuth in ~/.dpi/auth.json (shared via DPI_AUTH_FILE).
+MODEL = {"provider": os.environ.get("ORACLE_PROVIDER", "anthropic"), "modelId": os.environ.get("ORACLE_MODEL", "claude-opus-5-5")}
 CWD = str(pathlib.Path.home() / "Documents" / "dev")
 
 

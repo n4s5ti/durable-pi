@@ -15,7 +15,7 @@ const store = await Store.open({
   startDirs: config.startDirs,
   name: config.name,
   provider: config.provider,
-  authFile: join(config.home, "auth.json"),
+  authFile: config.authFile,
 });
 
 const app = express();

@@ -30,7 +30,7 @@ start = time.time()
 sub = api("POST", f"{a}/messages", {"content": prompt, "requestId": f"ab-{label}-{uuid.uuid4().hex[:8]}"})
 sid = sub["submissionId"]
 result = sub
-while result.get("status") not in ("done", "failed", "aborted", "cancelled", "error"):
+while result.get("status") in ("queued", "pending"):
     result = api("GET", f"/v1/sessions/oracle/submissions/{sid}?waitMs=240000")
     if time.time() - start > 1500:
         break
@@ -44,9 +44,10 @@ for e in new:
             tools[part.get("name")] += 1
 state = (api("GET", "/v1/docs/app.shared-state")["value"] or {}).get("oracle")
 record = {"agent": agent, "label": label, "status": result.get("status"), "seconds": elapsed, "tools": dict(tools),
-          "answer": (result.get("answer") or {}).get("text"), "oracleMap": state, "entries": len(new)}
+          "answer": (result.get("answer") or {}).get("text"), "reason": result.get("reason"), "oracleMap": state, "entries": len(new)}
 OUT.mkdir(exist_ok=True)
 (OUT / f"{label}.json").write_text(json.dumps(record, indent=2))
 print(json.dumps({k: record[k] for k in ("agent", "label", "status", "seconds", "tools", "entries")}))
 print("map projects:", sorted((state or {}).get("projects", {}).keys()))
+print("reason:", record["reason"]) if record["reason"] else None
 print("answer:", (record["answer"] or "")[:1500])
