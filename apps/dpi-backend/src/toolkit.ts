@@ -226,7 +226,7 @@ export type TodoArgs = {
   reason?: string;
 };
 
-const TodoList = defineDoc<{ phases: TodoPhase[] }>({
+export const TodoList = defineDoc<{ phases: TodoPhase[] }>({
   kind: "toolkit.todo",
   version: 1,
   scope: "conversation",

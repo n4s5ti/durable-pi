@@ -19,6 +19,10 @@ test("Shared App State persists across reload and is current across forks and se
     const otherMain = await store.resolveAgent(other.id, "main");
     await store.demoState(otherMain.c, { operation: "increment", path: "/custom/count", value: 1 });
     assert.deepEqual((await store.deviceDoc("app.shared-state")).value, { custom: { count: 3 } });
+    const before = (await store.activeEntries(otherMain.c)).length;
+    await store.demoState(otherMain.c, { operation: "create", path: "/custom/typed", value: "h", quiet: true });
+    assert.equal((await store.activeEntries(otherMain.c)).length, before, "a quiet save adds no transcript entry");
+    await store.demoState(otherMain.c, { operation: "delete", path: "/custom/typed", quiet: true });
     const revision = (await store.shared.snapshot()).revision;
     await store.shared.change({ operation: "increment", path: "/custom/count", value: 1 }, "repeatable-tool");
     await store.shared.change({ operation: "increment", path: "/custom/count", value: 1 }, "repeatable-tool");

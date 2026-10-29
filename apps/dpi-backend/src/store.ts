@@ -63,6 +63,8 @@ import { createPlayground, Workspace, type SpawnSession } from "./extensions.js"
 import { createJobs, JobRuns, JOB_DEFS, jobDef, resolveJobInput, type Jobs } from "./jobs.js";
 import { ADDON_INFO, createAddons, PROMPTS, PromptChecklist, type Addons } from "./addons.js";
 import { UiViews, viewsOf } from "./ui-tools.js";
+import { TodoList } from "./toolkit.js";
+import { RELOAD_DOC, ReloadSignal } from "./reload.js";
 import { JOB_RUNS_DOC } from "../../dpi-sdk/src/jobs.js";
 
 /** The pi-durable version this backend pins, read from package.json so the reported version cannot drift from it. */
@@ -103,7 +105,7 @@ export interface StoreOptions {
 /** Agent documents a client may read or stream, by kind. */
 /** apps/dpi-backend/src → the checkout root. */
 const CODE_DIR = resolve(import.meta.dirname, "../../..");
-const AGENT_DOCS = { [JOB_RUNS_DOC]: JobRuns, "demo.workspace": Workspace } as const;
+const AGENT_DOCS = { [JOB_RUNS_DOC]: JobRuns, "demo.workspace": Workspace, "toolkit.todo": TodoList, [RELOAD_DOC]: ReloadSignal } as const;
 export const AGENT_DOC_KINDS = Object.keys(AGENT_DOCS);
 export const DEVICE_DOC_KINDS = ["app.shared-state"];
 
@@ -1265,14 +1267,16 @@ export class Store {
       undefined,
       typeof body.expectedRevision === "number" ? body.expectedRevision : undefined,
     );
-    await c.commit(
-      (tx) =>
-        tx.appendEntry(c.id, {
-          kind: "demo.state-change",
-          data: { text: `Shared App State: ${change.operation} ${change.path || "/"}` },
-        }),
-      ctx,
-    );
+    // Canvas inputs save as the user types; `quiet` keeps those saves out of the transcript.
+    if (body.quiet !== true)
+      await c.commit(
+        (tx) =>
+          tx.appendEntry(c.id, {
+            kind: "demo.state-change",
+            data: { text: `Shared App State: ${change.operation} ${change.path || "/"}` },
+          }),
+        ctx,
+      );
     return { ok: true as const, ...(await this.deviceDoc("app.shared-state")) };
   }
 

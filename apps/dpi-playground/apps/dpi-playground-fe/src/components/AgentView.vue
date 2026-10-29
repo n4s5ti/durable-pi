@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { hideTool } from "@sdk/transcript";
 import { computed, nextTick, ref, watch } from "vue";
 import {
   Activity,
@@ -38,7 +39,8 @@ import {
 const chat = ref<HTMLElement>();
 const lineageNav = ref<HTMLElement>();
 const picker = ref(false);
-const items = computed(() => agentState.value.items);
+// Successful todo calls are drawn by the task widget on the chat box, not in the transcript.
+const items = computed(() => hideTool(agentState.value.items, "todo"));
 const liveItem = computed(() => items.value.some((i) => i.kind === "assistant" && i.streaming));
 const runningTool = computed(() =>
   items.value.some(

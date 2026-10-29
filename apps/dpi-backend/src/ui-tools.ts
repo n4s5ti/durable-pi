@@ -1,7 +1,7 @@
-// The ui-tools add-on: an agent publishes read-only views made from a closed component catalog
+// The ui-tools add-on: an agent publishes views made from a closed component catalog
 // (dpi-sdk/src/ui-spec.ts) and saves templates any agent on this device can reuse. Views are a
 // per-conversation document; they ride on the device tree to the hub, which streams them on the
-// AG-UI canvas. A spec is data, never code, and no component carries an action.
+// AG-UI canvas. A spec is data, never code; a button can only run a named action from UI_ACTIONS.
 //
 //   ui_render          publish or replace a view by id
 //   ui_clear           remove a view, or all of them
@@ -16,6 +16,7 @@ import {
   slotsOf,
   UI_ID,
   UI_LIMITS,
+  uiCatalogText,
   type UiNode,
   type UiView,
 } from "../../dpi-sdk/src/ui-spec.js";
@@ -33,11 +34,7 @@ export const UiViews = defineDoc<{ views: Record<string, string> }>({
   checkpointWhen: () => false,
 });
 
-const CATALOG = `Components (JSON objects, "type" plus these fields; anything else is rejected):
-card {title?, children} · row {children} · column {children} · text {text, tone?} · markdown {text} ·
-metric {label, value, unit?} (value is a string) · badge {text, tone?} · progress {value 0..1, label?} ·
-list {items: string[]} · table {columns: string[], rows: string[][]}. tone: default, muted, accent, urgent.
-Limits: depth ${UI_LIMITS.depth}, ${UI_LIMITS.nodes} components, ${UI_LIMITS.text} characters per string, ${UI_LIMITS.items} list items or rows, ${UI_LIMITS.columns} columns, ${UI_LIMITS.views} views per agent.`;
+const CATALOG = uiCatalogText();
 
 const idParam = Type.String({ description: "View id: lowercase letters, digits, . _ -, up to 64" });
 
@@ -94,7 +91,7 @@ export const viewsOf = (doc: { views: Record<string, string> } | undefined): UiV
 export function createUiTools(shared: SharedState) {
   const render = defineTool({
     name: "ui_render",
-    description: `Show a read-only view on the user's live canvas, attached to you. Publishing an existing id replaces that view. Use it for dashboards, status, results and summaries the user should see at a glance.\n${CATALOG}`,
+    description: `Show a view on the user's live canvas, attached to you. Publishing an existing id replaces that view. Use it for dashboards, status, results and summaries the user should see at a glance, forms (input components) the user fills in, and buttons that run named actions. Bind values to data with @path so the view stays live without re-rendering.\n${CATALOG}`,
     parameters: Type.Object({
       id: idParam,
       title: Type.String({ description: "Shown above the view" }),
@@ -189,7 +186,7 @@ export function createUiTools(shared: SharedState) {
       section(
         "ui-tools",
         () =>
-          "You can show the user read-only views on their live canvas with ui_render: dashboards, status and results built from a fixed component catalog (no HTML). Before building a layout from scratch, check ui_template_list and reuse a template with ui_template_use; save layouts worth repeating with ui_template_save. Keep views current: replace a view by id as things change, and ui_clear views that no longer matter.",
+          "You can show the user views on their live canvas with ui_render: dashboards, status and results built from a fixed component catalog (no HTML), and forms whose input boxes are bound to App State paths so you and the user fill the same fields. Before building a layout from scratch, check ui_template_list and reuse a template with ui_template_use; save layouts worth repeating with ui_template_save. Keep views current: replace a view by id as things change, and ui_clear views that no longer matter.",
         { tag: false },
       ),
     ],

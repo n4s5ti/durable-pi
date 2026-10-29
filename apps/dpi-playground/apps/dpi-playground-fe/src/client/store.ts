@@ -216,6 +216,25 @@ export const busy = computed(
     tasks.value.some((t) => !t.effectiveBackground && t.conversationId === selected.value?.agentId),
 );
 export const usage = computed(() => sumUsage(agentState.value.usage));
+
+// The agent's reload tool bumps `ext.reload`. The first value seen for an agent is the baseline; a
+// later change reloads the page so new playground code takes effect.
+const reloadSeen = new Map<string, number>();
+watch(
+  () =>
+    [
+      selected.value && `${selected.value.deviceId}/${selected.value.sessionId}/${selected.value.agentId}`,
+      agentState.value.docs["ext.reload"] as { n?: number } | undefined,
+    ] as const,
+  ([key, doc]) => {
+    // The doc arrives as {} until the tool first runs; that counts as 0.
+    if (!key || !doc) return;
+    const n = doc.n ?? 0;
+    const seen = reloadSeen.get(key);
+    if (seen === undefined) reloadSeen.set(key, n);
+    else if (seen !== n) location.reload();
+  },
+);
 export const currentModel = computed(() => {
   const m = agentState.value.agent.model;
   return models.value.find((x) => x.provider === m?.provider && x.id === m?.modelId);

@@ -6,6 +6,7 @@
 //   jev-damage-control   Jev judges every bash command before it runs and blocks destructive ones
 //   toolkit              search, todo, documents, web and GitHub tools (toolkit.ts)
 //   ui-tools             read-only views on the live canvas and device-wide UI templates (ui-tools.ts)
+//   hindsight            Hermes' long-term memory: auto recall, auto retain and three tools (hindsight.ts)
 //
 // A hook runs outside the commit line and can run again after a crash. A hook that asks a person or an outside API
 // must store the answer with `api.memo`, as the Jev guard does. A `safe` tool rerun after a crash skips `beforeTool`.
@@ -17,6 +18,8 @@ import { askJev, type JevAnswer, type JevQuestion } from "./jev.js";
 import type { SharedState } from "./shared-state.js";
 import { Toolkit } from "./toolkit.js";
 import { createUiTools } from "./ui-tools.js";
+import { createHindsight, hindsightSettings } from "./hindsight.js";
+import { ReloadExtension } from "./reload.js";
 
 const PROMPTS_DIR = join(import.meta.dirname, "../prompts");
 
@@ -114,6 +117,17 @@ export const ADDON_INFO: Omit<HarnessExtensionInfo, "enabled" | "prompts">[] = [
     description:
       "Read-only views on the live canvas from a fixed component catalog (cards, metrics, tables, progress…), plus UI templates saved on this device for any agent to reuse: ui_render, ui_clear, ui_template_save, ui_template_list, ui_template_use.",
   },
+  {
+    name: "reload",
+    title: "Reload",
+    description:
+      "A reload tool for working on Durable Pi itself: reloads every playground tab and TUI attached to the agent, restarts dpi-backend, or both.",
+  },
+  {
+    name: "hindsight",
+    title: "Hindsight memory",
+    description: `The Hermes agent's long-term memory (bank ${hindsightSettings().bank}). Recalls relevant memories into each run, stores every finished turn, and adds hindsight_retain, hindsight_recall and hindsight_reflect. If Hindsight is down, runs continue without it.`,
+  },
 ];
 
 export function createAddons(opts: { offline: boolean; shared: SharedState }) {
@@ -156,13 +170,16 @@ export function createAddons(opts: { offline: boolean; shared: SharedState }) {
     ],
   });
   const uiTools = createUiTools(opts.shared);
+  const hindsight = createHindsight({ offline: opts.offline });
   const all: Record<string, Extension> = {
     "system-prompts": prompts,
     "jev-damage-control": jev,
     toolkit: Toolkit,
     "ui-tools": uiTools,
+    reload: ReloadExtension,
+    hindsight,
   };
-  return { all, list: [prompts, jev, Toolkit, uiTools] };
+  return { all, list: [prompts, jev, Toolkit, uiTools, ReloadExtension, hindsight] };
 }
 
 export type Addons = ReturnType<typeof createAddons>;

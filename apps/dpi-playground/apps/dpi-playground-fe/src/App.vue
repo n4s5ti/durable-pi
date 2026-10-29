@@ -194,7 +194,10 @@ onBeforeUnmount(() => {
       ref="workspaceEl"
       class="net-workspace"
       :class="{ 'chat-fixed': chatFixed }"
-      :style="{ '--tree-w': `${treeWidth}px`, '--chat-w': `${chatWidth}px` }"
+      :style="{
+        '--tree-w': `${treeWidth}px`,
+        '--chat-w': ui.tab === 'canvas' ? `min(${chatWidth}px, 38%)` : `${chatWidth}px`,
+      }"
     >
       <NetworkSidebar />
       <div
