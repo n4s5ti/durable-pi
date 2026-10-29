@@ -36,12 +36,15 @@ while result.get("status") in ("queued", "pending"):
         break
 elapsed = round(time.time() - start, 1)
 after = api("GET", f"{a}/entries?scope=all&limit=2000")["items"]
-new = after[len(before):]
+last = max((e["id"] for e in before), default=0)
+new = sorted((e for e in after if e["id"] > last), key=lambda e: e["id"])  # entries come newest first
 tools = collections.Counter()
 for e in new:
-    for part in (e.get("model") or {}).get("content", []) if isinstance(e.get("model"), dict) else []:
-        if isinstance(part, dict) and part.get("type") == "toolCall":
-            tools[part.get("name")] += 1
+    messages = e.get("model") or []
+    for message in messages if isinstance(messages, list) else [messages]:
+        for part in message.get("content", []) if isinstance(message, dict) and isinstance(message.get("content"), list) else []:
+            if isinstance(part, dict) and part.get("type") == "toolCall":
+                tools[part.get("name")] += 1
 state = (api("GET", "/v1/docs/app.shared-state")["value"] or {}).get("oracle")
 record = {"agent": agent, "label": label, "status": result.get("status"), "seconds": elapsed, "tools": dict(tools),
           "answer": (result.get("answer") or {}).get("text"), "reason": result.get("reason"), "oracleMap": state, "entries": len(new)}
