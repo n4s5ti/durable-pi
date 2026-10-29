@@ -18,6 +18,7 @@ import { askJev, type JevAnswer, type JevQuestion } from "./jev.js";
 import type { SharedState } from "./shared-state.js";
 import { Toolkit } from "./toolkit.js";
 import { createUiTools } from "./ui-tools.js";
+import { createMemoryExtension, type MemoryStore } from "./memory.js";
 import { createHindsight, hindsightSettings } from "./hindsight.js";
 import { ReloadExtension } from "./reload.js";
 
@@ -124,13 +125,19 @@ export const ADDON_INFO: Omit<HarnessExtensionInfo, "enabled" | "prompts">[] = [
       "A reload tool for working on Durable Pi itself: reloads every playground tab and TUI attached to the agent, restarts dpi-backend, or both.",
   },
   {
+    name: "memory",
+    title: "DPI memory",
+    description:
+      "DPI's own long-term memory (memory.sqlite on this device), shared with Bags and Hermes. Recalls matching memories into each run, puts the user's standing feedback in front of every request, and adds remember, recall and forget.",
+  },
+  {
     name: "hindsight",
     title: "Hindsight memory",
     description: `The Hermes agent's long-term memory (bank ${hindsightSettings().bank}). Recalls relevant memories into each run, stores every finished turn, and adds hindsight_retain, hindsight_recall and hindsight_reflect. If Hindsight is down, runs continue without it.`,
   },
 ];
 
-export function createAddons(opts: { offline: boolean; shared: SharedState }) {
+export function createAddons(opts: { offline: boolean; shared: SharedState; memory: MemoryStore }) {
   const prompts = defineExtension({
     name: "system-prompts",
     sections: [
@@ -171,6 +178,7 @@ export function createAddons(opts: { offline: boolean; shared: SharedState }) {
   });
   const uiTools = createUiTools(opts.shared);
   const hindsight = createHindsight({ offline: opts.offline });
+  const memory = createMemoryExtension(opts.memory);
   const all: Record<string, Extension> = {
     "system-prompts": prompts,
     "jev-damage-control": jev,
@@ -178,8 +186,9 @@ export function createAddons(opts: { offline: boolean; shared: SharedState }) {
     "ui-tools": uiTools,
     reload: ReloadExtension,
     hindsight,
+    memory,
   };
-  return { all, list: [prompts, jev, Toolkit, uiTools, ReloadExtension, hindsight] };
+  return { all, list: [prompts, jev, Toolkit, uiTools, ReloadExtension, hindsight, memory] };
 }
 
 export type Addons = ReturnType<typeof createAddons>;

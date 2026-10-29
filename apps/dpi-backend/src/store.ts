@@ -1,4 +1,5 @@
 import { SharedState } from "./shared-state.js";
+import { MemoryStore } from "./memory.js";
 import type { StateChange } from "../../dpi-sdk/src/app-state.js";
 import type {
   AgentDetail,
@@ -81,6 +82,8 @@ export const WRITE_TOOLS = new Set([
   "ping_on_call_engineer",
   "subagent",
   "start_session",
+  "remember",
+  "forget",
 ]);
 
 /** The oracle's hands: tools that change code or run commands directly. The oracle tool set drops these and keeps
@@ -177,6 +180,8 @@ export class Store {
   readonly catalog: DatabaseSync;
   readonly startedAt = Date.now();
   shared!: SharedState;
+  /** DPI's long-term memory, device-wide (memory.ts). */
+  memory!: MemoryStore;
   uid!: string;
   modelList: ModelInfo[] = [];
   /** Curated models the OpenRouter catalog has, and those catalog entries. */
@@ -195,6 +200,9 @@ export class Store {
   }
   get sharedStatePath() {
     return join(this.options.dataDir, "app-state.sqlite");
+  }
+  get memoryPath() {
+    return join(this.options.dataDir, "memory.sqlite");
   }
   get sessionsDir() {
     return join(this.options.dataDir, "sessions");
@@ -262,6 +270,7 @@ export class Store {
     try {
       store.unlockShared = lockFile(`${store.sharedStatePath}.lock`);
       store.shared = await SharedState.open(store.sharedStatePath);
+      store.memory = MemoryStore.open(store.memoryPath);
       store.shared.harness.subscribeCommits(() => store.notify());
       for (const row of store.list()) {
         try {
@@ -600,7 +609,7 @@ export class Store {
       const playground = createPlayground(this.shared, row.id, this.spawnSession, jobs);
       registry.install(playground);
       // Custom extensions are installed but not selected: an agent turns them on in its own selection.
-      const addons = createAddons({ offline: this.options.provider === "faux", shared: this.shared });
+      const addons = createAddons({ offline: this.options.provider === "faux", shared: this.shared, memory: this.memory });
       for (const extension of addons.list) registry.install(extension);
       const harness = await Harness.open(
         await openNodeSqliteStorage(row.dbPath),
@@ -1362,6 +1371,7 @@ export class Store {
     }
     this.opened.clear();
     await this.shared?.close();
+    this.memory?.close();
     this.unlockShared?.();
     this.catalog.close();
     this.unlockCatalog();

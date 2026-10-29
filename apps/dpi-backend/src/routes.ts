@@ -5,7 +5,8 @@ import type { Conversation, Harness } from "@earendil-works/pi-durable";
 import { DEVICE_DOC_KINDS, type SessionRow, type Store } from "./store.js";
 import { agentStream, deviceStream, sessionStream } from "./streams.js";
 import { idempotent } from "./idempotency.js";
-import { invalid } from "./errors.js";
+import { invalid, notFound } from "./errors.js";
+import { MEMORY_KINDS, type MemoryKind } from "./memory.js";
 
 type Async = (req: Request, res: Response) => Promise<unknown>;
 const route = (fn: Async) => (req: Request, res: Response, next: NextFunction) => fn(req, res).catch(next);
@@ -59,6 +60,40 @@ export function v1(store: Store) {
     }
   });
   r.get("/fs/dirs", route(async (req, res) => res.json(await store.browse(String(req.query.path ?? "")))));
+  // ---------------------------------------------------------- memory (memory.ts)
+  const memoryKinds = (value: unknown) =>
+    typeof value === "string" && value ? (value.split(",") as MemoryKind[]).filter((k) => MEMORY_KINDS.includes(k)) : undefined;
+  r.get("/memory", (req, res) => {
+    const limit = req.query.limit === undefined ? 10 : int(req.query.limit, "limit");
+    res.json({ items: store.memory.search(String(req.query.query ?? ""), { kinds: memoryKinds(req.query.kind), limit }) });
+  });
+  r.get("/memory/rules", (_req, res) => res.json({ items: store.memory.rules() }));
+  r.get("/memory/stats", (_req, res) => res.json(store.memory.stats()));
+  r.get("/memory/:id", (req, res) => {
+    const m = store.memory.get(int(req.params.id, "id"));
+    if (!m) throw notFound(`No memory ${String(req.params.id)}`);
+    res.json(m);
+  });
+  r.post("/memory", (req, res) => {
+    try {
+      const { memory, created } = store.memory.add(req.body ?? {});
+      res.status(created ? 201 : 200).json({ memory, created });
+    } catch (e) {
+      throw invalid(e instanceof Error ? e.message : String(e));
+    }
+  });
+  r.post("/memory/import", (req, res) => {
+    const items = (req.body ?? {}).items;
+    if (!Array.isArray(items) || items.length > 1000) throw invalid("items must be an array of at most 1000 memories");
+    res.json(store.memory.addMany(items));
+  });
+  r.delete("/memory/:id", (req, res) => {
+    try {
+      res.json(store.memory.forget(int(req.params.id, "id"), String((req.body ?? {}).reason ?? req.query.reason ?? "forgotten")));
+    } catch (e) {
+      throw notFound(e instanceof Error ? e.message : String(e));
+    }
+  });
   r.get(
     "/docs/:kind",
     route(async (req, res) => {
