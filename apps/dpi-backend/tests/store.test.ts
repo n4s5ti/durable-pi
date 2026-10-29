@@ -257,3 +257,36 @@ test("read only: the agent is offered only tools that read; turning it off resto
     await t.cleanup();
   }
 });
+
+test("oracle tool set: delegation and state stay, direct shell and file edits leave; all restores them", async () => {
+  const t = await tempStore();
+  const store = await t.open();
+  try {
+    await mkdir(join(t.work, "kept"));
+    const session = await store.create({ name: "Oracle", cwd: t.work, model: faux });
+    const { row, h, c } = await store.resolveAgent(session.id, "main");
+    const offered = async () => (await store.agentDetail(row, c)).tools.filter((x) => x.offered).map((x) => x.name);
+    assert.equal((await store.agentDetail(row, c)).config.toolSet, "all");
+
+    assert.equal((await store.configure(row, c, { toolSet: "oracle" })).toolSet, "oracle");
+    const names = await offered();
+    for (const gone of ["bash", "write", "edit"]) assert.ok(!names.includes(gone), `${gone} is not offered`);
+    for (const kept of ["read", "subagent", "start_session", "run_durable_job", "update_state", "search_history"])
+      assert.ok(names.includes(kept), `${kept} is offered`);
+    assert.equal((await store.agentDetail(row, c)).config.readOnly, false);
+    const submission = await store.send(c, { content: "!rm -rf kept", requestId: "oracle-1" });
+    assert.equal((await store.settled(h, submission.id as number, 20000)).status, "done");
+    assert.ok(existsSync(join(t.work, "kept")), "bash never ran");
+
+    assert.equal((await store.configure(row, c, { toolSet: "readOnly" })).toolSet, "readOnly");
+    assert.equal((await store.agentDetail(row, c)).config.readOnly, true);
+    assert.equal((await store.configure(row, c, { toolSet: "oracle" })).toolSet, "oracle", "read only to oracle restores delegation");
+    assert.ok((await offered()).includes("subagent"));
+    assert.equal((await store.configure(row, c, { toolSet: "all" })).toolSet, "all");
+    assert.ok((await offered()).includes("bash"));
+    await assert.rejects(() => store.configure(row, c, { toolSet: "nope" }), /toolSet must be/);
+  } finally {
+    await store.close();
+    await t.cleanup();
+  }
+});

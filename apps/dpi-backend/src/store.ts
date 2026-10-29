@@ -83,6 +83,13 @@ export const WRITE_TOOLS = new Set([
   "start_session",
 ]);
 
+/** The oracle's hands: tools that change code or run commands directly. The oracle tool set drops these and keeps
+ * reading, research, App State and delegation, so code work goes to subagents, sessions and durable jobs. */
+export const ORACLE_REMOVED = new Set(["bash", "write", "edit"]);
+
+export const TOOL_SETS = ["all", "oracle", "readOnly"] as const;
+export type ToolSet = (typeof TOOL_SETS)[number];
+
 export type SessionRow = {
   id: string;
   name: string;
@@ -783,6 +790,13 @@ export class Store {
   async agentDetail(row: SessionRow, c: Conversation): Promise<AgentDetail> {
     const { agent, all, offered } = await this.toolsOf(c);
     const writers = all.filter((t) => WRITE_TOOLS.has(t.name));
+    const readOnly = writers.length > 0 && writers.every((t) => !offered.has(t.name));
+    const hands = all.filter((t) => ORACLE_REMOVED.has(t.name));
+    const toolSet: ToolSet = readOnly
+      ? "readOnly"
+      : hands.length > 0 && hands.every((t) => !offered.has(t.name))
+        ? "oracle"
+        : "all";
     return {
       ...(await this.agentSummary(row, c)),
       sessionId: row.id,
@@ -791,7 +805,8 @@ export class Store {
         thinkingLevel: agent.thinkingLevel as ThinkingLevel | undefined,
         instructions: agent.instructions,
         cwd: agent.cwd,
-        readOnly: writers.length > 0 && writers.every((t) => !offered.has(t.name)),
+        readOnly,
+        toolSet,
       },
       tools: all.map((t) => ({
         name: t.name,
@@ -863,13 +878,19 @@ export class Store {
       cwd = (await this.browse(body.cwd)).path;
     }
     if (body.readOnly !== undefined && typeof body.readOnly !== "boolean") throw invalid("readOnly must be a boolean");
-    // Read only filters the agent's tools: the model is never offered the ones that create, update or delete.
-    const tools =
-      body.readOnly === true
-        ? { tools: { remove: (await this.toolsOf(c)).all.filter((t) => WRITE_TOOLS.has(t.name)) } }
-        : body.readOnly === false
-          ? { tools: null }
-          : {};
+    if (body.toolSet !== undefined && !TOOL_SETS.includes(body.toolSet as ToolSet))
+      throw invalid(`toolSet must be one of ${TOOL_SETS.join(", ")}`);
+    // A tool set filters the agent's tools: read only drops every tool that creates, updates or deletes; oracle drops
+    // only the direct shell and file edits. readOnly is the older boolean form of the same choice.
+    const set: ToolSet | undefined =
+      (body.toolSet as ToolSet | undefined) ??
+      (body.readOnly === true ? "readOnly" : body.readOnly === false ? "all" : undefined);
+    const drop = set === "readOnly" ? WRITE_TOOLS : set === "oracle" ? ORACLE_REMOVED : undefined;
+    const tools = drop
+      ? { tools: { remove: (await this.toolsOf(c)).all.filter((t) => drop.has(t.name)) } }
+      : set === "all"
+        ? { tools: null }
+        : {};
     await c.configure(
       {
         ...tools,

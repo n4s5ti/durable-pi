@@ -175,6 +175,9 @@ export interface AgentConfig {
   cwd?: string;
   /** Offer only tools that read: tools that create, update or delete leave the agent's requests. */
   readOnly?: boolean;
+  /** Which tools the agent is offered: all of them, the oracle set (no bash, write or edit; delegation and App
+   * State stay) or read only. `readOnly` is the older boolean form. */
+  toolSet?: "all" | "oracle" | "readOnly";
 }
 
 /** A custom harness extension an agent can turn on or off: `GET / PATCH .../agents/:a/extensions`. */
