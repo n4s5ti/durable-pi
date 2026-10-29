@@ -398,7 +398,7 @@ export class MemoryStore {
 const line = (m: Memory) => `[${m.id}] (${m.kind}${m.occurredAt ? `, ${m.occurredAt.slice(0, 10)}` : ""}) ${m.text}`;
 
 export const RECALL_PREAMBLE =
-  "# DPI memory (recalled for this request)\nLong-term memories that match the user's message. Use them; do not look up what is already here.";
+  "# Your long-term memory (recalled for this request)\nLong-term memories that match the user's message. Use them; do not look up what is already here.";
 
 export function rulesBlock(rules: Memory[]) {
   if (!rules.length) return "";
@@ -420,7 +420,7 @@ export function createMemoryExtension(memory: MemoryStore, opts: { recallLimit?:
   const remember = defineTool({
     name: "remember",
     description:
-      "Store something in DPI's long-term memory, shared with the voice (Bags) and Hermes. kind: fact (about the user, projects, the world), preference (how the user likes things), feedback (a correction or instruction from the user about how you or Bags should behave; it becomes a standing rule for every future request), event (something that happened, with occurred_at), observation (a conclusion you drew). Store durable things only, one memory per call, in a plain self-contained sentence.",
+      "Store something in your long-term memory, shared with Hermes. kind: fact (about the user, projects, the world), preference (how the user likes things), feedback (a correction or instruction from the user about how you should behave; it becomes a standing rule for every future request), event (something that happened, with occurred_at), observation (a conclusion you drew). Store durable things only, one memory per call, in a plain self-contained sentence.",
     parameters: Type.Object({
       kind: Type.Union(MEMORY_KINDS.map((k) => Type.Literal(k))),
       text: Type.String({ description: "The memory, one self-contained sentence or short paragraph." }),
@@ -436,7 +436,7 @@ export function createMemoryExtension(memory: MemoryStore, opts: { recallLimit?:
   });
   const recall = defineTool({
     name: "recall",
-    description: "Search DPI's long-term memory by words. Returns matching memories with their ids, newest first on ties.",
+    description: "Search your long-term memory by words. Returns matching memories with their ids, newest first on ties.",
     parameters: Type.Object({
       query: Type.String({ description: "Words to search for." }),
       kind: Type.Optional(Type.Union(MEMORY_KINDS.map((k) => Type.Literal(k)))),

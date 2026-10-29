@@ -126,9 +126,9 @@ export const ADDON_INFO: Omit<HarnessExtensionInfo, "enabled" | "prompts">[] = [
   },
   {
     name: "memory",
-    title: "DPI memory",
+    title: "Bags memory",
     description:
-      "DPI's own long-term memory (memory.sqlite on this device), shared with Bags and Hermes. Recalls matching memories into each run, puts the user's standing feedback in front of every request, and adds remember, recall and forget.",
+      "Bags' long-term memory (memory.sqlite on this device), shared with Hermes. Recalls matching memories into each run, puts the user's standing feedback in front of every request, and adds remember, recall and forget.",
   },
   {
     name: "hindsight",

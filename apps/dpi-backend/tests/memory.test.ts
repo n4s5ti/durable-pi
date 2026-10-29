@@ -99,7 +99,7 @@ test("memory extension: remember, recall and forget as tools; recall and rules r
 
     // Auto-recall puts matching memories in front of the user's message; the faux model echoes what it got.
     out = await send("what GPU is in my workstation");
-    assert.match(out.slice(out.lastIndexOf("Echo:")), /DPI memory \(recalled for this request\)[\s\S]*RTX 3080 Ti/);
+    assert.match(out.slice(out.lastIndexOf("Echo:")), /Your long-term memory \(recalled for this request\)[\s\S]*RTX 3080 Ti/);
 
     out = await send('tool: forget {"id":2,"reason":"withdrawn"}');
     assert.equal(store.memory.rules().length, 0);
