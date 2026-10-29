@@ -20,6 +20,10 @@ The contract every Durable Agent Network client uses: the web hub, `dpi-tui`, sc
 | `GET /v1/tree` | | `DeviceTree`: sessions with agents and busy/background |
 | `GET /v1/events` | `?docs=app.shared-state` | device stream |
 | `GET /v1/fs/dirs` | `?path=` (empty = start dirs) | `{path, parent, dirs[]}`, one level, directories only |
+| `GET /v1/library` | `?query=&lesson=&source=&limit=` (`limit` defaults to 8, max 50) | `{items:[{id, source, lesson, kind, ref, text, originId, createdAt, score, similarity?}]}`: the course library's passages, keyword (FTS5) and embedding recall fused by reciprocal rank; keywords only while the embedder is down. `lesson` matches the whole name or its first word (`T8`, `8` or `T8 The Agentic Layer`). The library is `library.sqlite`, apart from memory: it never appears in memory recall or rules |
+| `GET /v1/library/stats` | | `{total, bySource, byKind, byLesson, pendingEmbeddings?, embedError?}` |
+| `POST /v1/library/import` | `{items:[{source, lesson, kind: transcript\|doc, ref, text, originId}]}` (≤1000 items; the 256 KB body limit means batches of about 250) | `{added, skipped, invalid, errors}`; a known `originId` is skipped, so imports are idempotent. To re-chunk a source, wipe it first |
+| `DELETE /v1/library` | `?source=` (required) | `{source, deleted}`: removes every passage of that source |
 | `GET /v1/docs/app.shared-state` | | `{kind, value, revision}` |
 | `GET /v1/sessions` | | `SessionSummary[]` |
 | `POST /v1/sessions` | `{name, cwd, model:{provider,modelId}, thinkingLevel?}` | `201 SessionSummary` |
@@ -53,6 +57,10 @@ The contract every Durable Agent Network client uses: the web hub, `dpi-tui`, sc
 ## Agent tools
 
 Every agent gets the coding tools `read`, `write`, `edit` and `bash`, plus the playground tools `read_state`, `update_state`, `list_durable_jobs`, `run_durable_job`, `check_durable_job`, `search_history`, `ping_on_call_engineer`, `subagent`, `start_session` and `handoff`. `readOnly` removes the eight that write: `bash`, `write`, `edit`, `update_state`, `run_durable_job`, `ping_on_call_engineer`, `subagent` and `start_session`. `GET .../agents/:a` lists each tool with its replay policy and whether it is offered.
+
+## Course library
+
+`oracle/library_ingest.py` turns the course transcripts (WEBVTT) and docs (markdown) into passages of about 250 words and imports them with `POST /v1/library/import`. Agents with the `library` add-on get `library_recall {query, lesson?, limit≤8}`, and each run gets the two best passages in front of the user's message when their cosine similarity clears `DPI_LIBRARY_MIN_SIMILARITY` (default 0.62; keyword-only: most query words present). `DPI_LIBRARY_AUTO_RECALL=off` keeps the tool and drops the automatic passages.
 
 ## Durable jobs
 

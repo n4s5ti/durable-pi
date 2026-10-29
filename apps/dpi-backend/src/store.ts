@@ -1,5 +1,6 @@
 import { SharedState } from "./shared-state.js";
 import { MemoryStore, OllamaEmbedder } from "./memory.js";
+import { LibraryStore } from "./library.js";
 import type { StateChange } from "../../dpi-sdk/src/app-state.js";
 import type {
   AgentDetail,
@@ -182,6 +183,8 @@ export class Store {
   shared!: SharedState;
   /** DPI's long-term memory, device-wide (memory.ts). */
   memory!: MemoryStore;
+  /** The user's course library, device-wide and apart from memory (library.ts). */
+  library!: LibraryStore;
   uid!: string;
   modelList: ModelInfo[] = [];
   /** Curated models the OpenRouter catalog has, and those catalog entries. */
@@ -203,6 +206,9 @@ export class Store {
   }
   get memoryPath() {
     return join(this.options.dataDir, "memory.sqlite");
+  }
+  get libraryPath() {
+    return join(this.options.dataDir, "library.sqlite");
   }
   get sessionsDir() {
     return join(this.options.dataDir, "sessions");
@@ -271,10 +277,9 @@ export class Store {
       store.unlockShared = lockFile(`${store.sharedStatePath}.lock`);
       store.shared = await SharedState.open(store.sharedStatePath);
       // Semantic recall embeds with local Ollama; off for the faux provider (tests) or with DPI_EMBED=off.
-      store.memory = MemoryStore.open(
-        store.memoryPath,
-        options.provider === "faux" || process.env.DPI_EMBED === "off" ? undefined : new OllamaEmbedder(),
-      );
+      const embedder = () => (options.provider === "faux" || process.env.DPI_EMBED === "off" ? undefined : new OllamaEmbedder());
+      store.memory = MemoryStore.open(store.memoryPath, embedder());
+      store.library = LibraryStore.open(store.libraryPath, embedder());
       store.shared.harness.subscribeCommits(() => store.notify());
       for (const row of store.list()) {
         try {
@@ -613,7 +618,7 @@ export class Store {
       const playground = createPlayground(this.shared, row.id, this.spawnSession, jobs);
       registry.install(playground);
       // Custom extensions are installed but not selected: an agent turns them on in its own selection.
-      const addons = createAddons({ offline: this.options.provider === "faux", shared: this.shared, memory: this.memory });
+      const addons = createAddons({ offline: this.options.provider === "faux", shared: this.shared, memory: this.memory, library: this.library });
       for (const extension of addons.list) registry.install(extension);
       const harness = await Harness.open(
         await openNodeSqliteStorage(row.dbPath),
@@ -1376,6 +1381,7 @@ export class Store {
     this.opened.clear();
     await this.shared?.close();
     this.memory?.close();
+    this.library?.close();
     this.unlockShared?.();
     this.catalog.close();
     this.unlockCatalog();

@@ -90,6 +90,27 @@ export function v1(store: Store) {
     if (!Array.isArray(items) || items.length > 1000) throw invalid("items must be an array of at most 1000 memories");
     res.json(store.memory.addMany(items));
   });
+  // ---------------------------------------------------------- course library (library.ts), apart from memory
+  r.get(
+    "/library",
+    route(async (req, res) => {
+      const limit = req.query.limit === undefined ? 8 : int(req.query.limit, "limit");
+      const lesson = typeof req.query.lesson === "string" && req.query.lesson.trim() ? req.query.lesson : undefined;
+      const source = typeof req.query.source === "string" && req.query.source.trim() ? req.query.source : undefined;
+      res.json({ items: await store.library.recall(String(req.query.query ?? ""), { lesson, source, limit }) });
+    }),
+  );
+  r.get("/library/stats", (_req, res) => res.json(store.library.stats()));
+  r.post("/library/import", (req, res) => {
+    const items = (req.body ?? {}).items;
+    if (!Array.isArray(items) || items.length > 1000) throw invalid("items must be an array of at most 1000 passages");
+    res.json(store.library.addMany(items));
+  });
+  r.delete("/library", (req, res) => {
+    const source = typeof req.query.source === "string" ? req.query.source.trim() : "";
+    if (!source) throw invalid("source is required, e.g. ?source=idd");
+    res.json(store.library.wipe(source));
+  });
   r.delete("/memory/:id", (req, res) => {
     try {
       res.json(store.memory.forget(int(req.params.id, "id"), String((req.body ?? {}).reason ?? req.query.reason ?? "forgotten")));

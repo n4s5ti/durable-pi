@@ -19,6 +19,7 @@ import { Toolkit } from "./toolkit.js";
 import { createUiTools } from "./ui-tools.js";
 import { createMemoryExtension, type MemoryStore } from "./memory.js";
 import { ReloadExtension } from "./reload.js";
+import { createLibraryExtension, type LibraryStore } from "./library.js";
 
 const PROMPTS_DIR = join(import.meta.dirname, "../prompts");
 
@@ -123,6 +124,12 @@ export const ADDON_INFO: Omit<HarnessExtensionInfo, "enabled" | "prompts">[] = [
       "A reload tool for working on Durable Pi itself: reloads every playground tab and TUI attached to the agent, restarts dpi-backend, or both.",
   },
   {
+    name: "library",
+    title: "Course library",
+    description:
+      "The user's course transcripts and docs (library.sqlite on this device, apart from Bags memory). Adds library_recall, and puts the two most relevant passages in front of each run when they clear a similarity threshold.",
+  },
+  {
     name: "memory",
     title: "Bags memory",
     description:
@@ -130,7 +137,7 @@ export const ADDON_INFO: Omit<HarnessExtensionInfo, "enabled" | "prompts">[] = [
   },
 ];
 
-export function createAddons(opts: { offline: boolean; shared: SharedState; memory: MemoryStore }) {
+export function createAddons(opts: { offline: boolean; shared: SharedState; memory: MemoryStore; library: LibraryStore }) {
   const prompts = defineExtension({
     name: "system-prompts",
     sections: [
@@ -171,6 +178,7 @@ export function createAddons(opts: { offline: boolean; shared: SharedState; memo
   });
   const uiTools = createUiTools(opts.shared);
   const memory = createMemoryExtension(opts.memory);
+  const library = createLibraryExtension(opts.library);
   const all: Record<string, Extension> = {
     "system-prompts": prompts,
     "jev-damage-control": jev,
@@ -178,8 +186,9 @@ export function createAddons(opts: { offline: boolean; shared: SharedState; memo
     "ui-tools": uiTools,
     reload: ReloadExtension,
     memory,
+    library,
   };
-  return { all, list: [prompts, jev, Toolkit, uiTools, ReloadExtension, memory] };
+  return { all, list: [prompts, jev, Toolkit, uiTools, ReloadExtension, memory, library] };
 }
 
 export type Addons = ReturnType<typeof createAddons>;
