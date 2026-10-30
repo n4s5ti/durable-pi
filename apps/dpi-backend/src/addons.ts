@@ -17,7 +17,7 @@ import { defineDoc, defineExtension, hook, section, ToolTask, type Extension } f
 import type { HarnessExtensionInfo } from "../../dpi-sdk/src/api.js";
 import { askJev, type JevAnswer, type JevQuestion } from "./jev.js";
 import type { SharedState } from "./shared-state.js";
-import { Toolkit } from "./toolkit.js";
+import { createToolkit, type TodoHost } from "./toolkit.js";
 import { createUiTools } from "./ui-tools.js";
 import { createMemoryExtension, type MemoryStore } from "./memory.js";
 import { ReloadExtension } from "./reload.js";
@@ -164,6 +164,8 @@ export function createAddons(opts: {
   sessionName: () => string;
   /** An agent's display name in this session, for the skills audit log. */
   agentName?: (conversationId: number) => string;
+  /** The session's delegation engine: with it the todo tool takes trigger todos. */
+  todoHost?: TodoHost;
 }) {
   const prompts = defineExtension({
     name: "system-prompts",
@@ -208,10 +210,11 @@ export function createAddons(opts: {
   const library = createLibraryExtension(opts.library);
   const expertise = createExpertiseExtension(opts.expertise, opts.sessionName);
   const skills = createSkillsExtension(opts.skills, { sessionName: opts.sessionName, agentName: opts.agentName });
+  const toolkit = createToolkit(opts.todoHost);
   const all: Record<string, Extension> = {
     "system-prompts": prompts,
     "jev-damage-control": jev,
-    toolkit: Toolkit,
+    toolkit,
     "ui-tools": uiTools,
     reload: ReloadExtension,
     memory,
@@ -219,7 +222,7 @@ export function createAddons(opts: {
     expertise,
     skills,
   };
-  return { all, list: [prompts, jev, Toolkit, uiTools, ReloadExtension, memory, library, expertise, skills] };
+  return { all, list: [prompts, jev, toolkit, uiTools, ReloadExtension, memory, library, expertise, skills] };
 }
 
 export type Addons = ReturnType<typeof createAddons>;

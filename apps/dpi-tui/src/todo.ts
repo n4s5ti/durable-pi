@@ -5,8 +5,10 @@ import { c } from "./theme.ts";
 
 export const TODO_DOC = "toolkit.todo";
 
-type Status = "pending" | "active" | "done" | "blocked" | "dropped";
-type Task = { content: string; status: Status; reason?: string };
+type Status = "pending" | "active" | "done" | "blocked" | "dropped" | "running";
+/** A trigger todo's agent (kind "trigger"): `running` while it works, then `done` with run.result or `blocked` with reason. */
+type Run = { backend?: string; url?: string; result?: string };
+type Task = { content: string; status: Status; reason?: string; kind?: string; run?: Run };
 type Phase = { name: string; tasks: Task[] };
 
 const SPINNER = ["✳", "✴", "✵", "✶", "✷", "✸", "✹", "✺", "✻", "✼", "✽"];
@@ -28,7 +30,7 @@ export class TodoWidget implements Component {
   /** Feed the latest document. Returns true while a task is active, so the caller keeps animating. */
   set(doc: unknown) {
     this.phases = (doc as { phases?: Phase[] } | undefined)?.phases ?? [];
-    const active = this.tasks().filter((t) => t.status === "active").map((t) => t.content);
+    const active = this.tasks().filter((t) => t.status === "active" || t.status === "running").map((t) => t.content);
     for (const k of [...this.since.keys()]) if (!active.includes(k)) this.since.delete(k);
     for (const k of active) if (!this.since.has(k)) this.since.set(k, Date.now());
     return active.length > 0;
@@ -49,7 +51,7 @@ export class TodoWidget implements Component {
     const n = (...s: Status[]) => tasks.filter((t) => s.includes(t.status)).length;
     const parts = [
       n("done") && `${n("done")} done`,
-      n("active") && `${n("active")} in progress`,
+      n("active", "running") && `${n("active", "running")} in progress`,
       n("pending", "blocked") && `${n("pending", "blocked")} open`,
     ].filter(Boolean);
     const lines = [c.accent(`● ${tasks.length} tasks (${parts.join(", ")})`)];
@@ -60,11 +62,12 @@ export class TodoWidget implements Component {
       for (const t of live) {
         if (++num > MAX_VISIBLE) continue;
         const id = c.muted(`#${num}`);
-        if (t.status === "active")
+        if (t.status === "active" || t.status === "running")
           lines.push(
-            `  ${c.accent(SPINNER[this.frame % SPINNER.length])} ${id} ${c.accent(`${t.content}…`)} ${c.muted(`(${duration(Date.now() - (this.since.get(t.content) ?? Date.now()))})`)}`,
+            `  ${c.accent(SPINNER[this.frame % SPINNER.length])} ${id} ${c.accent(`${t.content}…`)} ${c.muted(`(${t.run?.backend ? `${t.run.backend}, ` : ""}${duration(Date.now() - (this.since.get(t.content) ?? Date.now()))})`)}`,
           );
-        else if (t.status === "done") lines.push(`  ${c.ok("✔")} ${c.muted(c.strike(`#${num} ${t.content}`))}`);
+        else if (t.status === "done")
+          lines.push(`  ${c.ok("✔")} ${c.muted(c.strike(`#${num} ${t.content}`))}${t.run?.result ? c.muted(` › ${t.run.result.replace(/\s+/g, " ").slice(0, 120)}`) : ""}`);
         else
           lines.push(
             `  ◻ ${id} ${t.content}${t.status === "blocked" ? c.muted(` › blocked${t.reason ? `: ${t.reason}` : ""}`) : ""}`,

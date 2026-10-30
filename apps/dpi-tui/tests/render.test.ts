@@ -71,3 +71,27 @@ test("TranscriptView reuses components for unchanged items and renders a recorde
   assert.match(text, /bash/);
   for (const line of view.render(60)) assert.ok(visibleWidth(line) <= 60);
 });
+
+test("todo widget: a running trigger todo shows beside the active plain one, a done one shows its result, a blocked one its reason", async () => {
+  const { TodoWidget } = await import("../src/todo.ts");
+  const widget = new TodoWidget();
+  const animating = widget.set({
+    phases: [
+      {
+        name: "Tasks",
+        tasks: [
+          { content: "plain", status: "active" },
+          { content: "cloud fix", status: "running", kind: "trigger", run: { backend: "cloud", url: "https://claude.ai/code/session_x" } },
+          { content: "lint", status: "done", kind: "trigger", run: { backend: "local", result: "0 problems\nall clean" } },
+          { content: "tests", status: "blocked", kind: "trigger", reason: "3 failing" },
+        ],
+      },
+    ],
+  });
+  assert.equal(animating, true);
+  const text = widget.render(120).join("\n").replace(/\u001b\[[0-9;]*m/g, "");
+  assert.match(text, /4 tasks \(1 done, 2 in progress, 1 open\)/);
+  assert.match(text, /plain….*\n.*cloud fix… \(cloud, \d+s\)/);
+  assert.match(text, /✔ #3 lint › 0 problems all clean/);
+  assert.match(text, /tests.*blocked: 3 failing/);
+});
