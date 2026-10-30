@@ -16,6 +16,7 @@ const store = await Store.open({
   name: config.name,
   provider: config.provider,
   authFile: config.authFile,
+  providers: config.providers,
 });
 
 const app = express();
