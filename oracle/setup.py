@@ -2,7 +2,7 @@
 """Create or refresh the oracle session on the oracle device (127.0.0.1:4790).
 
 One session `oracle` working in ~/Documents/dev, with two agents for the A/B test:
-  main        tool set "oracle" (slim: no bash, write or edit)
+  main        tool set "all" (bash and the real CLIs; no wrappers)
   oracle-all  tool set "all"
 Both get the charter as instructions and the same model. Idempotent: rerun after editing the charter.
 """
@@ -31,7 +31,7 @@ sid = session["id"]
 agents = {a["name"]: a for a in api("GET", f"/v1/sessions/{sid}/agents")}
 if "oracle-all" not in agents:
     api("POST", f"/v1/sessions/{sid}/agents", {"from": "main", "name": "oracle-all"})
-for name, tool_set in (("main", "oracle"), ("oracle-all", "all")):
+for name, tool_set in (("main", "all"), ("oracle-all", "all")):
     cfg = api("PATCH", f"/v1/sessions/{sid}/agents/{name}/config",
               {"model": MODEL, "instructions": charter, "cwd": CWD, "toolSet": tool_set})
     for addon in ("memory", "library", "expertise", "skills"):

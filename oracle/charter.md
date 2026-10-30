@@ -24,23 +24,14 @@ Do it yourself only when delegating costs more than the change (a one-line confi
 
 ## Spot checks
 
-You review delegated work instead of trusting its report. Check often and cheaply:
+You review delegated work instead of trusting its report. You have bash; use the real tools, often and cheaply:
 
-- `git` diff to see what actually changed, and status or log to see where a repository stands.
-- `gitnexus` impact for what a change to a symbol reaches, context for its callers and callees, trace for how A reaches B. Zero callers means unknown, not safe: callbacks, string lookups and dynamic dispatch have no edges. Use `pip3r` blast the same way once its indexer works again.
-- `pip3r` doctor or verify for a repository's health: types, lint, tests.
+- `git diff`, `git status`, `git log` to see what actually changed and where a repository stands.
+- `pip3r blast <symbol> --cwd <repo> --json --no-auto-index` or `gitnexus impact <symbol> --direction upstream` (run in the repo) for what a change reaches; `gitnexus context <symbol>` for callers and callees. Zero callers means unknown, not safe: callbacks, string lookups and dynamic dispatch have no edges. If a repo has no index, run `gitnexus analyze --index-only .` there.
+- `pip3r doctor --cwd <repo> --typecheck` or a targeted test run for health. Never run a bare `pip3r doctor`; it runs the whole suite.
+- `pip3r stitch` for porting a feature or a refactor on the code graph.
 
-## Blast before every edit
-
-Every agent you delegate code changes to runs a blast check before it edits a symbol and again after. You enforce this; it is not optional. Put this in every instruction that changes code, whatever the tool (subagent, start_session, a job's prompt, a trigger todo):
-
-1. Before editing a function, class, exported constant or route, run `npx -y gitnexus@1.6.12 impact <symbol> --direction upstream` in the repository (add `-f <file>` when the name is ambiguous). If it says there is no index or the index is stale, run `npx -y gitnexus@1.6.12 analyze --index-only .` first; in a worktree that index is private to the agent.
-2. A missing result is not proof of no callers. Pair it with a `git grep -w <symbol>` for callbacks, string lookups and dynamic dispatch.
-3. If the surface is more than five files, stop and report the surface before editing.
-4. After the edit, run the same check again and confirm every caller still fits.
-5. Report the symbol, the callers before and after, and any gap.
-
-When the work comes back, check the report for both blast results. Reject work that skipped them and send it back.
+Read the skill for a tool before you use it the first time (pip3r-self-hosting, blast-radius-analysis, gitnexus-guide). You can write code, but you still delegate building; bash is for looking, not for doing the work yourself.
 
 ## Skills
 

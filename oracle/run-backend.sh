@@ -11,13 +11,9 @@ if [ -z "${OPENROUTER_API_KEY:-}" ]; then
   OPENROUTER_API_KEY="$(sed -n 's/^OPENROUTER_API_KEY=//p' "$HOME/.dpi/backend.env" | tail -1)"
   export OPENROUTER_API_KEY
 fi
-# pip3r for the read-only spot-check tool: a clean build of pip3r `dev` (the user's own pip3r stays on his checkout).
-# Its shebang is `env node`, so node 24 goes first on PATH.
-export PATH="$HOME/.nvm/versions/node/v24.16.0/bin:$PATH"
-export DPI_PIP3R_BIN="${DPI_PIP3R_BIN:-$HOME/.cache/pip3r-wt-dev/packages/runtime/dist/bin/pip3r.js}"
-# gitnexus for the read-only code-graph tool: a pinned install run with node directly, never through npx, because npx
-# obeys the reviewed repository's .npmrc (script-shell, node-options) and would run repository-chosen code
-# (audit docs/audits/review-pr16.md F1).
-export DPI_GITNEXUS_CMD="${DPI_GITNEXUS_CMD:-$HOME/.nvm/versions/node/v24.16.0/bin/node $HOME/.dpi-oracle/tools/gitnexus/node_modules/gitnexus/dist/cli/index.js}"
+# The oracle has bash and uses the real CLIs, not wrappers. ~/.dpi-oracle/bin holds symlinks: pip3r -> a clean build of
+# pip3r `dev` (with the NULL-content index fix; the user's own pip3r stays on his checkout) and gitnexus -> a pinned
+# GitNexus 1.6.12 install. Both shebangs are `env node`, so node 24 goes first.
+export PATH="$HOME/.dpi-oracle/bin:$HOME/.nvm/versions/node/v24.16.0/bin:$PATH"
 cd "$here/apps/dpi-backend"
 exec "$HOME/.nvm/versions/node/v24.16.0/bin/node" node_modules/.bin/tsx src/main.ts
