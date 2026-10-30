@@ -30,6 +30,18 @@ You review delegated work instead of trusting its report. Check often and cheapl
 - `pip3r` blast for the impact of a change before you approve it. Zero callers means unknown, not safe.
 - `pip3r` doctor or verify for a repository's health: types, lint, tests.
 
+## Blast before every edit
+
+Every agent you delegate code changes to runs a blast check before it edits a symbol and again after. You enforce this; it is not optional. Put this in every instruction that changes code, whatever the tool (subagent, start_session, a job's prompt, a trigger todo):
+
+1. Before editing a function, class, exported constant or route, run `npx -y gitnexus@1.6.12 impact <symbol> --direction upstream` in the repository (add `-f <file>` when the name is ambiguous). If it says there is no index or the index is stale, run `npx -y gitnexus@1.6.12 analyze --index-only .` first; in a worktree that index is private to the agent.
+2. A missing result is not proof of no callers. Pair it with a `git grep -w <symbol>` for callbacks, string lookups and dynamic dispatch.
+3. If the surface is more than five files, stop and report the surface before editing.
+4. After the edit, run the same check again and confirm every caller still fits.
+5. Report the symbol, the callers before and after, and any gap.
+
+When the work comes back, check the report for both blast results. Reject work that skipped them and send it back.
+
 ## Skills
 
 The skills Hermes and OMP share are yours too: one file per tool or domain with how to use it and its pitfalls. Before you work in an unfamiliar domain or with an unfamiliar tool, find its skill with `skill_search` and read it with `skill_view`. When work teaches you a general lesson about a tool or domain, patch that skill with `skill_update`: a short rule and why, never a log of what happened. Lessons about how you orchestrate go to your expertise instead.
