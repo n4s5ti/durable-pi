@@ -134,6 +134,8 @@ test("sessions, browse, names, forks, jobs, restart recovery, approval, interrup
 test("start_session: an agent starts an independent session, once per tool call", async () => {
   const t = await tempStore();
   const store = await t.open();
+  // Delegated sessions default to claude-haiku-latest, which a faux device does not have; name its model.
+  process.env.DPI_SUBAGENT_MODEL = faux.modelId;
   try {
     const parent = await store.create({ name: "Parent", cwd: "project", model: faux, thinkingLevel: "minimal" });
     const { h, c } = await store.resolveAgent(parent.id, "main");
@@ -141,7 +143,7 @@ test("start_session: an agent starts an independent session, once per tool call"
     const answer = await store.settled(h, sent.id as number, 15000);
     assert.equal(answer.status, "done");
 
-    // Relative cwd resolves against the parent's folder; model and thinking level come from the parent.
+    // Relative cwd resolves against the parent's folder; the model is DPI_SUBAGENT_MODEL's, the thinking level the parent's.
     const child = store.list().find((r) => r.name === "Child");
     assert.ok(child, "Child session exists");
     assert.equal(child.cwd, join(t.work, "project"));
@@ -162,6 +164,7 @@ test("start_session: an agent starts an independent session, once per tool call"
     assert.equal(prompted.submissionId, replayed.submissionId, "the first prompt is admitted once");
     assert.equal(store.list().filter((r) => r.name === "Idle" || r.name === "Prompted").length, 2);
   } finally {
+    delete process.env.DPI_SUBAGENT_MODEL;
     await store.close();
     await t.cleanup();
   }

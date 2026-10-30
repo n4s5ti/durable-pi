@@ -64,6 +64,10 @@ The contract every Durable Agent Network client uses: the web hub, `dpi-tui`, sc
 
 Every agent gets the coding tools `read`, `write`, `edit` and `bash`, plus the playground tools `read_state`, `update_state`, `list_durable_jobs`, `run_durable_job`, `check_durable_job`, `search_history`, `ping_on_call_engineer`, `subagent`, `start_session` and `handoff`. `readOnly` removes the eight that write: `bash`, `write`, `edit`, `update_state`, `run_durable_job`, `ping_on_call_engineer`, `subagent` and `start_session`. `GET .../agents/:a` lists each tool with its replay policy and whether it is offered.
 
+### Delegated agents' models
+
+`subagent {task, model?}` and `start_session {name, cwd, model?, prompt?}` run the delegated agent on `DPI_SUBAGENT_MODEL` (read at each call), by default `claude-haiku-latest`; pass `model` (for example `claude-sonnet-latest` when the task needs more reasoning) to pick another. Wherever a device model id is taken (these tools, job `model` inputs, and anthropic `{provider, modelId}` in session creation and agent config), the aliases `claude-haiku-latest`, `claude-sonnet-latest` and `claude-opus-latest` resolve to the newest model of that family in the device's Anthropic catalog (now `claude-haiku-5-5`, `claude-sonnet-5-5`, `claude-opus-5-5`). An id the device does not offer fails the call with the ids to choose from; nothing falls back to another model, so a device without the subscription (or the faux provider) needs `DPI_SUBAGENT_MODEL` or an explicit `model`.
+
 ### Spot-check tools (toolkit)
 
 The toolkit's read-only tools stay in every tool set, `oracle` and `readOnly` included, so an agent that delegates can review the work without bash.

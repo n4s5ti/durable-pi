@@ -129,7 +129,22 @@ export type SpawnSession = (input: {
   prompt?: string;
 }) => Promise<{ session: SessionSummary; submissionId?: number }>;
 
-export function createPlayground(shared: SharedState, sessionId: string, spawn: SpawnSession, jobs: Jobs) {
+/** The model subagent and start_session use when the call names none: DPI_SUBAGENT_MODEL, read at each call, or the
+ * newest Haiku. */
+export const DEFAULT_SUBAGENT_MODEL = "claude-haiku-latest";
+export const subagentModelId = () => process.env.DPI_SUBAGENT_MODEL?.trim() || DEFAULT_SUBAGENT_MODEL;
+
+const MODEL_CHOICE =
+  "Model id from this device's model list, or an alias: claude-haiku-latest, claude-sonnet-latest (when the task needs more reasoning), claude-opus-latest.";
+
+export function createPlayground(
+  shared: SharedState,
+  sessionId: string,
+  spawn: SpawnSession,
+  jobs: Jobs,
+  /** A device model id or alias as a model ref; throws on an unknown id. */
+  resolveModel: (id: string) => { provider: string; modelId: string },
+) {
   const readAppState = defineTool({
     name: "read_state",
     description:
@@ -423,17 +438,22 @@ export function createPlayground(shared: SharedState, sessionId: string, spawn: 
   const subagent = defineTool({
     name: "subagent",
     description:
-      "Delegate a self-contained task to an owned child conversation. Parent interruption also interrupts the child.",
-    parameters: Type.Object({ task: Type.String() }),
+      "Delegate a self-contained task to an owned child conversation. Parent interruption also interrupts the child. The child runs on Haiku by default (claude-haiku-latest); pass model: claude-sonnet-latest when the task needs more reasoning. An unknown model fails the call.",
+    parameters: Type.Object({
+      task: Type.String(),
+      model: Type.Optional(Type.String({ description: `${MODEL_CHOICE} Default: claude-haiku-latest.` })),
+    }),
     replay: "safe",
     execute: async (args, api, ctx) => {
+      // Resolved before anything is created, so an unknown id fails the call instead of falling back to another model.
+      const model = resolveModel(args.model?.trim() || subagentModelId());
       const id = await api.commit(async (tx) => {
         const found = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
         if (found) return found.id;
         const child = await tx.createConversation({
           ownership: { kind: "task", taskId: api.taskId },
         });
-        await configure(tx, child.id, { tools: { remove: [subagent] } });
+        await configure(tx, child.id, { tools: { remove: [subagent] }, model });
         return child.id;
       }, ctx);
       await api.details({ conversationId: id }, ctx);
@@ -460,14 +480,14 @@ export function createPlayground(shared: SharedState, sessionId: string, spawn: 
   const startSession = defineTool({
     name: "start_session",
     description:
-      "Start a new session on this device: its own harness, database and working directory, independent of this one. It keeps running if you are interrupted. Returns immediately; you do not wait for it.",
+      "Start a new session on this device: its own harness, database and working directory, independent of this one. It keeps running if you are interrupted. Returns immediately; you do not wait for it. It runs on Haiku by default (claude-haiku-latest); pass model: claude-sonnet-latest when the work needs more reasoning. An unknown model fails the call.",
     parameters: Type.Object({
       name: Type.String({ description: "Session name shown in the network tree." }),
       cwd: Type.String({
         description: "Existing folder on this device. Relative paths resolve against your working directory.",
       }),
       model: Type.Optional(
-        Type.String({ description: "Model id from this device's model list. Default: your current model." }),
+        Type.String({ description: `${MODEL_CHOICE} Default: claude-haiku-latest.` }),
       ),
       prompt: Type.Optional(
         Type.String({ description: "First message for the new session. Default: none, the session starts idle." }),
@@ -476,14 +496,13 @@ export function createPlayground(shared: SharedState, sessionId: string, spawn: 
     replay: "safe",
     execute: async (args, api, ctx) => {
       const parent = await api.agent(ctx);
-      if (!parent.model) throw Error("This agent has no model to copy");
       const cwd = args.cwd.startsWith("~") || isAbsolute(args.cwd) ? args.cwd : resolve(parent.cwd ?? ".", args.cwd);
       const thinking = THINKING_LEVELS.find((level) => level === parent.thinkingLevel);
       const { session, submissionId } = await spawn({
         key: `start_session:${sessionId}:${api.taskId}`,
         name: args.name,
         cwd,
-        model: { provider: parent.model.provider, modelId: args.model ?? parent.model.modelId },
+        model: resolveModel(args.model?.trim() || subagentModelId()),
         thinkingLevel: thinking,
         prompt: args.prompt?.trim() || undefined,
       });
