@@ -124,11 +124,13 @@ export function pip3rArgv(sub: string, args: readonly string[] = [], dir: string
     if (!allowed.has(flag))
       throw Error(`pip3r ${s} ${flag} is not on this tool's list of read-only flags (spell flags in kebab-case as in pip3r ${s} --help)`);
     out.push(arg);
-    // A value flag written as two tokens takes the next one as its value, even if it starts with "-".
+    // A value flag written as two tokens takes the next one. It may not start with "-", so every "-" token in `out` is a
+    // flag whichever way pip3r parses, and the forced flags below cannot be swallowed or hidden as a value.
     if (allowed.get(flag) && eq < 0) {
       if (i + 1 >= args.length) throw Error(`pip3r ${s} ${flag} needs a value`);
       const value = args[++i];
       if (typeof value !== "string" || /[\0\n\r]/.test(value) || value.length > 1000) throw Error(`Invalid value for ${flag}`);
+      if (value.startsWith("-")) throw Error(`pip3r ${s} ${flag} value may not start with "-"; write ${flag}=${value} to pass one`);
       out.push(value);
     }
   }

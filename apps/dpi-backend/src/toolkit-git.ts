@@ -1,11 +1,16 @@
 // git: read-only repository state for agents without bash (the oracle tool set). One op per call, argv only, no
 // shell. Every command reads: `--no-optional-locks` keeps `git status` from refreshing the index, and refs and paths
 // that look like options are refused so no argument can turn into a flag; core.fsmonitor is off so a repo's config
-// cannot run a hook. `diff` prints patch text without external diff drivers or textconv filters, so no repo config can
-// run a program while it reads.
+// cannot run a hook. `diff` prints patch text without external diff drivers or textconv filters. Attributes are read
+// from the empty tree (git 2.40+), not from the worktree, so a .gitattributes `filter=` cannot make `status` or `diff`
+// run a filter.<driver>.clean program on a dirty file. Left open: the repo's own .git/info/attributes, and the global
+// and system attributes files.
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-durable";
 import { clip, run, sessionPath, text } from "./toolkit-common.js";
+
+/** git's empty tree: `--attr-source` with it means "no .gitattributes anywhere in the repository". */
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 const OPS = ["status", "log", "branches", "ahead_behind", "diff_stat", "diff", "show", "worktrees", "remotes"] as const;
 
@@ -88,7 +93,7 @@ const git = defineTool({
     const dir = await sessionPath(api, repo, ctx);
     const parts: string[] = [];
     for (const argv of gitArgv(args.op as Op, args)) {
-      const { code, out } = await run(api, ["git", "--no-optional-locks", "--no-pager", "-c", "core.fsmonitor=false", "-C", dir, ...argv], ctx);
+      const { code, out } = await run(api, ["git", "--no-optional-locks", "--no-pager", `--attr-source=${EMPTY_TREE}`, "-c", "core.fsmonitor=false", "-C", dir, ...argv], ctx);
       if (code !== 0) {
         if (args.op === "status" && argv[0] === "stash") continue;
         throw Error(out.trim() || `git ${argv[0]} failed with exit code ${code}`);

@@ -145,6 +145,19 @@ export function createPlayground(
   /** A device model id or alias as a model ref; throws on an unknown id. */
   resolveModel: (id: string) => { provider: string; modelId: string },
 ) {
+  /**
+   * The model for a delegated agent: the one the call names (unknown fails), else the default. A device that lacks the
+   * default (an OpenRouter-only one has no Haiku) falls back to the parent's model, and `note` says so.
+   */
+  const delegateModel = (named: string | undefined, parent: { provider: string; modelId: string } | undefined): { model: { provider: string; modelId: string }; note?: string } => {
+    if (named?.trim()) return { model: resolveModel(named.trim()) };
+    try {
+      return { model: resolveModel(subagentModelId()) };
+    } catch (e) {
+      if (!parent) throw e;
+      return { model: parent, note: `Note: ${subagentModelId()} is not available on this device, so the parent's model ${parent.provider}/${parent.modelId} was used.` };
+    }
+  };
   const readAppState = defineTool({
     name: "read_state",
     description:
@@ -446,7 +459,7 @@ export function createPlayground(
     replay: "safe",
     execute: async (args, api, ctx) => {
       // Resolved before anything is created, so an unknown id fails the call instead of falling back to another model.
-      const model = resolveModel(args.model?.trim() || subagentModelId());
+      const { model, note } = delegateModel(args.model, (await api.agent(ctx)).model);
       const id = await api.commit(async (tx) => {
         const found = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
         if (found) return found.id;
@@ -471,6 +484,7 @@ export function createPlayground(
           : undefined;
       return {
         output: [
+          ...(note ? [{ type: "text" as const, text: note }] : []),
           { type: "text", text: answer ? JSON.stringify(answer.model) : JSON.stringify(result) },
         ],
         details: { conversationId: id },
@@ -498,11 +512,12 @@ export function createPlayground(
       const parent = await api.agent(ctx);
       const cwd = args.cwd.startsWith("~") || isAbsolute(args.cwd) ? args.cwd : resolve(parent.cwd ?? ".", args.cwd);
       const thinking = THINKING_LEVELS.find((level) => level === parent.thinkingLevel);
+      const { model, note } = delegateModel(args.model, parent.model);
       const { session, submissionId } = await spawn({
         key: `start_session:${sessionId}:${api.taskId}`,
         name: args.name,
         cwd,
-        model: resolveModel(args.model?.trim() || subagentModelId()),
+        model,
         thinkingLevel: thinking,
         prompt: args.prompt?.trim() || undefined,
       });
@@ -514,7 +529,7 @@ export function createPlayground(
         output: [
           {
             type: "text",
-            text: `Started session "${session.name}" (${session.id}) in ${session.cwd} with ${session.model}. ${sent}`,
+            text: `Started session "${session.name}" (${session.id}) in ${session.cwd} with ${session.model}. ${sent}${note ? ` ${note}` : ""}`,
           },
         ],
         details: { sessionId: session.id, ...(submissionId === undefined ? {} : { submissionId }) },

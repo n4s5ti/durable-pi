@@ -434,7 +434,8 @@ export class SkillIndex {
     const at = current.indexOf(oldString);
     const next = current.slice(0, at) + newString + current.slice(at + oldString.length);
     if (Buffer.byteLength(next) > SKILL_FILE_MAX_BYTES) throw new SkillInvalid(`the patched file would exceed ${SKILL_FILE_MAX_BYTES} bytes`);
-    if (rel === "SKILL.md") {
+    // The file's real name decides, so a references/ symlink to a SKILL.md gets the same checks.
+    if (rel === "SKILL.md" || basename(real) === "SKILL.md") {
       const fm = parseFrontmatter(next);
       if (skill.frontmatter || fm) {
         if (!fm) throw new SkillInvalid("the patch breaks SKILL.md's front matter (it no longer parses); keep the --- block intact");
@@ -467,8 +468,9 @@ export class SkillIndex {
       }
     }
 
-    // Atomic replace of the real file: a temp file beside it, synced, then renamed over it. Re-check the sha256 just
-    // before the rename, so a write that landed meanwhile is never overwritten.
+    // Atomic replace of the real file: a temp file beside it, synced, then renamed over it. The sha256 re-check just
+    // before the rename narrows the window for a write from another process to the instant between the check and the
+    // rename; it does not close it, and a write landing there is overwritten (its content is in no revision).
     const tmp = join(dirname(real), `.${basename(real)}.dpi-${process.pid}-${randomBytes(4).toString("hex")}.tmp`);
     try {
       const fd = openSync(tmp, "wx", mode || 0o644);
@@ -488,11 +490,17 @@ export class SkillIndex {
       throw e;
     }
 
+    // The file is replaced by now: a failing audit line is reported next to the success, never as "Not saved".
     const line = { time: new Date().toISOString(), session: who.session, agent: who.agent, name: skill.name, file: rel, path: real, oldSha256: oldSha, newSha256: newSha, revision };
-    appendFileSync(this.auditPath, `${JSON.stringify(line)}\n`, { mode: 0o600 });
-    chmodSync(this.auditPath, 0o600);
+    let auditWarning: string | undefined;
+    try {
+      appendFileSync(this.auditPath, `${JSON.stringify(line)}\n`, { mode: 0o600 });
+      chmodSync(this.auditPath, 0o600);
+    } catch (e) {
+      auditWarning = `the file was replaced but the audit line could not be written: ${(e as Error).message}`;
+    }
     this.invalidate();
-    return { name: skill.name, file: rel, path: real, oldSha256: oldSha, newSha256: newSha, revision };
+    return { name: skill.name, file: rel, path: real, oldSha256: oldSha, newSha256: newSha, revision, ...(auditWarning ? { auditWarning } : {}) };
   }
 }
 
@@ -581,7 +589,7 @@ export function createSkillsExtension(index: SkillIndex, who: { sessionName: () 
           session: who.sessionName(),
           agent: who.agentName?.(id) ?? `#${id}`,
         });
-        return text(`Patched ${r.name}/${r.file}. sha256 is now ${r.newSha256}; the old content is kept as a revision.`);
+        return text(`Patched ${r.name}/${r.file}. sha256 is now ${r.newSha256}; the old content is kept as a revision.${r.auditWarning ? ` Warning: ${r.auditWarning}.` : ""}`);
       } catch (e) {
         return text(`Not saved: ${e instanceof Error ? e.message : String(e)}`);
       }

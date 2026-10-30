@@ -1,7 +1,7 @@
 // Blind review of PR #16 (the gitnexus tool), see docs/audits/review-pr16.md. Two kinds of tests:
-//   finding tests  fail on the merged code; skipped with "finding: <id>" so the suite stays green. Run them with
-//                  REVIEW_PR16_FINDINGS=1 npx tsx --test tests/review-pr16.test.ts
-//   mutant tests   pass on the merged code and fail on a mutant the PR's own tests let survive (M1-M7 in the doc)
+//   finding tests  F1-F3 failed on the merged code and now pass; F2 is closed by removing the cypher command
+//   mutant tests   pass and fail on a mutant the PR's own tests let survive (M3, M4, M6, M7 in the doc; M1, M2 and M5
+//                  guarded the cypher guard, which is gone with the command)
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -10,17 +10,16 @@ import { join } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import {
-  checkCypher,
-  CYPHER_REFUSED,
   extractJson,
+  GITNEXUS_COMMANDS,
   GITNEXUS_TOOLS,
   gitnexusArgv,
   noIndexMessage,
   runGitnexus,
 } from "../src/toolkit-gitnexus.js";
 
-const finding = (id: string) => (process.env.REVIEW_PR16_FINDINGS ? false : `finding: ${id}`);
 const ctx = {} as Context;
+process.env.DPI_GITNEXUS_CMD = "gitnexus-stub"; // required; the stub env below never runs it
 
 /** An env whose exec answers from `reply(argv)`, recording every argv; enough for runGitnexus and the tool. */
 function stubEnv(reply: (argv: string[]) => string | string[]) {
@@ -40,7 +39,7 @@ function stubEnv(reply: (argv: string[]) => string | string[]) {
 
 const STATUS = JSON.stringify({ repository: "/r", status: "up-to-date", index: { commit: "a" }, current: { commit: "a" } });
 
-test("F1: a reviewed repo's .npmrc must not run its own code through the default `npx -y gitnexus@1.6.12`", { skip: finding("F1") }, async () => {
+test("F1: with DPI_GITNEXUS_CMD unset the tool fails clearly and never runs npx, so a reviewed repo's .npmrc runs nothing", async () => {
   // What a delegated agent can commit: a package.json, a script, and a project .npmrc that npx reads from its cwd.
   // npm_config_cache in the environment (as under `npm start`) does not help: neither key is overridden by it.
   const vectors = {
@@ -56,7 +55,7 @@ test("F1: a reviewed repo's .npmrc must not run its own code through the default
         writeFileSync(join(repo, "package.json"), '{"name":"victim","version":"1.0.0"}');
         writeFileSync(join(repo, ".npmrc"), `${npmrc}\n`);
         writeFileSync(join(repo, file), body, { mode: 0o755 });
-        await runGitnexus({ env: new NodeExecutionEnv({ cwd: repo }) }, { command: "status" }, repo, ctx).catch(() => "");
+        await assert.rejects(runGitnexus({ env: new NodeExecutionEnv({ cwd: repo }) }, { command: "status" }, repo, ctx), /DPI_GITNEXUS_CMD/);
         const ran = existsSync(join(repo, "PWNED")) ? readFileSync(join(repo, "PWNED"), "utf8").trim() : "";
         assert.equal(ran, "", `${name}: the repo's own code ran inside the read-only tool (${ran})`);
       } finally {
@@ -68,33 +67,15 @@ test("F1: a reviewed repo's .npmrc must not run its own code through the default
   }
 });
 
-test("F2: a quote inside /* */ comments hides LOAD FROM, CALL and CREATE from the cypher guard", { skip: finding("F2") }, () => {
-  for (const q of [
-    `MATCH (n) WITH count(n) AS c /* ' */ LOAD FROM "/etc/passwd" (header=false) RETURN * /* ' */`,
-    "MATCH (n) WITH count(n) AS c /* ' */ CALL show_tables() RETURN * /* ' */",
-    `MATCH (n) /* ' */ CREATE (f:Function {id:"x", name:"x"}) /* ' */ RETURN count(n) AS c`,
-    "MATCH (n) WITH n /* \" */ SET n.name = 'x' /* \" */ RETURN n",
-    "MATCH (n) /* ` */ DETACH DELETE n /* ` */ RETURN 1",
-  ])
-    assert.throws(() => checkCypher(q), /refused/, q);
+test("F2: there is no cypher command to hide a LOAD FROM or CALL in", () => {
+  assert.ok(!(GITNEXUS_COMMANDS as readonly string[]).includes("cypher"));
+  assert.throws(() => gitnexusArgv({ command: "cypher", query: `MATCH (n) WITH n /* ' */ LOAD FROM "/etc/passwd" RETURN * /* ' */` }, "/r"), /is not allowed/);
 });
 
-test("F3: a pino record without msg before the result is returned instead of the result", { skip: finding("F3") }, () => {
+test("F3: a pino record without msg before the result is returned instead of the result", () => {
   // What pino prints for logger.warn({ truncation }) with no message string: level and time, no msg.
   const log = '{"level":40,"time":1793329272249,"name":"gitnexus","truncation":{"truncated":true}}';
   assert.equal(extractJson(`  GitNexus Context (1.6.12)\n${log}\n{"status":"found"}\n`), '{"status":"found"}');
-});
-
-test("M1: backtick identifiers are read queries, not unclosed strings", () => {
-  for (const q of ["MATCH (`n`) RETURN `n`.name", "MATCH (n) RETURN n.name AS `set`", "MATCH (n) RETURN n.name AS `it's`"])
-    assert.doesNotThrow(() => checkCypher(q), q);
-});
-
-test("M2: every keyword API.md lists is refused after a MATCH", () => {
-  // The documented list, written out: iterating CYPHER_REFUSED would shrink with it.
-  const documented = "CREATE MERGE DELETE DETACH SET REMOVE DROP ALTER COPY LOAD CALL INSTALL ATTACH EXPORT IMPORT CHECKPOINT USE BEGIN COMMIT ROLLBACK FOREACH";
-  assert.deepEqual([...CYPHER_REFUSED].sort(), documented.split(" ").sort());
-  for (const k of documented.split(" ")) assert.throws(() => checkCypher(`MATCH (n) ${k.toLowerCase()} x RETURN n`), new RegExp(`refused: .*${k}`), k);
 });
 
 test("M3: the tool refuses a repo starting with '-' before it touches the environment", async () => {
@@ -106,10 +87,6 @@ test("M3: the tool refuses a repo starting with '-' before it touches the enviro
 test("M4: output cut at the 2 MB capture says so with a '+'", async () => {
   const { api } = stubEnv((argv) => (argv.includes("status") ? STATUS : Array(25).fill("x".repeat(100_000))));
   assert.match(await runGitnexus(api, { command: "context", target: "a" }, "/r", ctx), /of \d+\+ characters/);
-});
-
-test("M5: a cypher query over 4000 characters is refused", () => {
-  assert.throws(() => gitnexusArgv({ command: "cypher", query: `MATCH (n) WHERE n.name = '${"x".repeat(4000)}' RETURN n` }, "/r"), /Invalid query/);
 });
 
 test("M6: a status with an error answers no index even when it names an index, and runs nothing else", async () => {

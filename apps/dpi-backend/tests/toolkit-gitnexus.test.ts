@@ -6,10 +6,8 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  checkCypher,
   extractJson,
   GITNEXUS_COMMANDS,
-  GITNEXUS_DEFAULT_CMD,
   GITNEXUS_MAX_CHARS,
   gitnexusArgv,
   gitnexusCmd,
@@ -25,7 +23,7 @@ import { faux, tempStore } from "./helpers.js";
 const R = "/repo";
 
 test("gitnexus argv: one typed builder per command, pinned to the index with --repo=", () => {
-  assert.deepEqual([...GITNEXUS_COMMANDS], ["query", "context", "impact", "trace", "cypher", "check", "status"]);
+  assert.deepEqual([...GITNEXUS_COMMANDS], ["query", "context", "impact", "trace", "check", "status"]);
   assert.deepEqual(gitnexusArgv({ command: "context", target: "subagentModelId" }, R), ["context", "subagentModelId", "--repo=/repo"]);
   assert.deepEqual(gitnexusArgv({ command: "context", target: "execute", file: "src/a.ts", limit: 10 }, R), [
     "context", "execute", "--file=src/a.ts", "--limit=10", "--repo=/repo",
@@ -41,7 +39,6 @@ test("gitnexus argv: one typed builder per command, pinned to the index with --r
     "trace", "a", "b", "--from-file=x.ts", "--to-file=y.ts", "--depth=5", "--repo=/repo",
   ]);
   assert.deepEqual(gitnexusArgv({ command: "query", query: "auth flow", limit: 3 }, R), ["query", "auth flow", "--limit=3", "--repo=/repo"]);
-  assert.deepEqual(gitnexusArgv({ command: "cypher", query: "MATCH (n) RETURN n.name" }, R), ["cypher", "MATCH (n) RETURN n.name", "--limit=50", "--repo=/repo"]);
   assert.deepEqual(gitnexusArgv({ command: "check" }, R), ["check", "--cycles", "--json", "--repo=/repo"]);
   assert.deepEqual(gitnexusArgv({ command: "status" }, R), ["status", "--json", "--repo=/repo"]);
   // A value that would be a flag stays inside --flag=value.
@@ -49,14 +46,13 @@ test("gitnexus argv: one typed builder per command, pinned to the index with --r
 });
 
 test("gitnexus argv: writing and unknown commands, '-' positionals, bad values and depth bounds are refused", () => {
-  for (const command of ["analyze", "index", "clean", "remove", "setup", "uninstall", "serve", "mcp", "wiki", "publish", "update", "auto-sync", "embeddings", "group", "list", "", "--help", "impact;rm"])
+  for (const command of ["analyze", "cypher", "index", "clean", "remove", "setup", "uninstall", "serve", "mcp", "wiki", "publish", "update", "auto-sync", "embeddings", "group", "list", "", "--help", "impact;rm"])
     assert.throws(() => gitnexusArgv({ command, target: "x" }, R), /is not allowed/, command);
   assert.throws(() => gitnexusArgv({ command: "impact", target: "--help" }, R), /may not start with "-"/);
   assert.throws(() => gitnexusArgv({ command: "context", target: "-x" }, R), /may not start with "-"/);
   assert.throws(() => gitnexusArgv({ command: "trace", from: "a", to: "--depth=99" }, R), /may not start with "-"/);
   assert.throws(() => gitnexusArgv({ command: "trace", from: "-a", to: "b" }, R), /may not start with "-"/);
   assert.throws(() => gitnexusArgv({ command: "query", query: "--content" }, R), /may not start with "-"/);
-  assert.throws(() => gitnexusArgv({ command: "cypher", query: "-MATCH (n) RETURN n" }, R), /may not start with "-"/);
   assert.throws(() => gitnexusArgv({ command: "impact" }, R), /needs target .* or uid/);
   assert.throws(() => gitnexusArgv({ command: "trace", from: "a" }, R), /to must be/);
   assert.throws(() => gitnexusArgv({ command: "query" }, R), /query must be/);
@@ -69,44 +65,9 @@ test("gitnexus argv: writing and unknown commands, '-' positionals, bad values a
     assert.throws(() => gitnexusArgv({ command: "trace", from: "a", to: "b", depth }, R), /depth must be/, String(depth));
   }
   for (const depth of [1, 5]) assert.ok(gitnexusArgv({ command: "impact", target: "x", depth }, R).includes(`--depth=${depth}`));
-  assert.throws(() => gitnexusArgv({ command: "cypher", query: "MATCH (n) RETURN n", limit: 201 }, R), /limit must be/);
+  assert.throws(() => gitnexusArgv({ command: "context", target: "x", limit: 101 }, R), /limit must be/);
   assert.throws(() => gitnexusArgv({ command: "query", query: "x", limit: 21 }, R), /limit must be/);
   assert.throws(() => gitnexusArgv({ command: "context", target: "x", limit: 0 }, R), /limit must be/);
-});
-
-test("gitnexus cypher: read queries pass; writes, loads, calls and multiple statements are refused in any case", () => {
-  for (const q of [
-    "MATCH (n:Function) WHERE n.name = 'x' RETURN n.name, n.filePath",
-    "optional match (a)-[r]->(b) return count(r)",
-    "WITH 1 AS x RETURN x",
-    "UNWIND [1,2] AS x RETURN x",
-    "MATCH (n) WHERE n.name = 'CREATE (m)' RETURN n", // keywords inside strings are fine
-    'MATCH (n) WHERE n.content CONTAINS "DELETE n; SET x" RETURN n.name',
-    "MATCH (n) RETURN n.callCount, n.settings // set nothing",
-    "MATCH (n)-[:CodeRelation {type: 'CALLS'}]->(m) RETURN m.name;",
-  ])
-    assert.doesNotThrow(() => checkCypher(q), q);
-  const refused: [string, RegExp][] = [
-    ["MATCH (n) DETACH DELETE n", /DELETE, DETACH|DETACH|DELETE/],
-    ["match (n) set n.x = 1 return n", /SET/],
-    ["MATCH (n) REMOVE n.x RETURN n", /REMOVE/],
-    ["MATCH (a) MERGE (a)-[:X]->(b) RETURN a", /MERGE/],
-    ["MATCH (n) WITH n CREATE (m) RETURN m", /CREATE/],
-    ["MATCH (n) CALL db.labels() RETURN n", /CALL/],
-    ["MATCH (n) RETURN n; DROP TABLE Function", /single statement/],
-    ["MATCH (n) WITH n FOREACH (x IN [1] | SET n.y = x) RETURN n", /SET|FOREACH/],
-    ["CREATE (n:Function {name: 'x'})", /must be a read query/],
-    ["DROP TABLE Function", /must be a read query/],
-    ["COPY Function FROM 'x.csv'", /must be a read query/],
-    ["LOAD EXTENSION fts", /must be a read query/],
-    ["CALL show_tables() RETURN *", /must be a read query/],
-    ["ALTER TABLE Function ADD x INT", /must be a read query/],
-    ["MATCH (n) RETURN n LIMIT 1 /* */ ; CREATE (m)", /single statement/],
-    ["MATCH (n) WHERE n.name = 'x RETURN n", /unclosed string/],
-    ["MATCH (n) WITH n LOAD FROM 'x' RETURN n", /LOAD/],
-  ];
-  for (const [q, why] of refused) assert.throws(() => checkCypher(q), why, q);
-  assert.throws(() => gitnexusArgv({ command: "cypher", query: "MATCH (n) DETACH DELETE n" }, R), /refused/);
 });
 
 test("gitnexus output: JSON after banner and pino log lines, trailing noise dropped; no JSON returns the text", () => {
@@ -143,8 +104,7 @@ test("gitnexus: no-index detection, staleness line, command override; it is not 
   assert.match(stalenessLine({ index: { commit: "aaaaaaa1" }, current: { commit: "bbbbbbb2" } }), /NOT at HEAD/);
   const saved = process.env.DPI_GITNEXUS_CMD;
   delete process.env.DPI_GITNEXUS_CMD;
-  assert.deepEqual(gitnexusCmd(), GITNEXUS_DEFAULT_CMD.split(" "));
-  assert.deepEqual(gitnexusCmd(), ["npx", "-y", "gitnexus@1.6.12"]);
+  assert.throws(() => gitnexusCmd(), /DPI_GITNEXUS_CMD must name an installed GitNexus.*never runs npx/, "no default, and never npx");
   process.env.DPI_GITNEXUS_CMD = "  /opt/node   /opt/gitnexus.js ";
   assert.deepEqual(gitnexusCmd(), ["/opt/node", "/opt/gitnexus.js"]);
   if (saved === undefined) delete process.env.DPI_GITNEXUS_CMD;
@@ -211,7 +171,7 @@ echo '{"level":30,"time":3,"msg":"after"}' >&2
     assert.match(out, /"argv": \["impact", "createStore; rm -rf \/", /, "one argument, never a shell");
     assert.doesNotMatch(out, /GitNexus banner|"level"/, "banner and log lines are dropped");
     assert.match(await call({ command: "context", repo: "bare", target: "foo" }), /No GitNexus index for bare; ask for a manual index/);
-    assert.match(await call({ command: "cypher", repo: "proj", query: "MATCH (n) DETACH DELETE n" }), /refused/);
+    assert.match(await call({ command: "cypher", repo: "proj", query: "MATCH (n) DETACH DELETE n" }), /not allowed|Expected|must be/i);
     assert.match(await call({ command: "context", repo: "proj", target: "--help" }), /may not start with "-"/);
     assert.match(await call({ command: "analyze", repo: "proj" }), /not allowed|Expected|must be/i);
     assert.match(await call({ command: "status", repo: "missing-dir" }), /does not exist/);

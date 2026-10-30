@@ -69,10 +69,12 @@ test("subagent: the child is configured with the newest Haiku by default, with t
     const children = async () => (await store.agents(row)).filter((a) => a.kind === "subagent").map((a) => a.id).sort((a, b) => a - b);
     const childModel = async (id: number) => (await store.agentDetail(row, (await store.resolveAgent(s.id, String(id))).c)).config.model;
 
-    // A faux device has no Haiku: the default fails with the alias and its target named, and no child is created.
-    assert.match(await call({ task: "say hi" }), /Unknown model claude-haiku-latest \(claude-haiku-5-5\)\. Choose one of: echo/);
+    // A faux device has no Haiku: the default falls back to the parent's model and says so (review-pr15 F7); a model named
+    // in the call that is unknown still fails and creates no child.
+    assert.match(await call({ task: "say hi" }), /claude-haiku-latest is not available on this device, so the parent's model faux\/echo was used/);
+    assert.deepEqual(await childModel((await children())[0]), faux);
     assert.match(await call({ task: "say hi", model: "gpt-nope" }), /Unknown model gpt-nope/);
-    assert.deepEqual(await children(), []);
+    assert.equal((await children()).length, 1);
 
     // Stand in for a subscription device's resolver (tested above) and record the ids asked for. The children then fail
     // their own run on this faux device, but their stored model is what the subagent tool configured.
@@ -85,15 +87,15 @@ test("subagent: the child is configured with the newest Haiku by default, with t
     };
     await call({ task: "say hi" });
     let ids = await children();
-    assert.equal(ids.length, 1);
-    assert.deepEqual(await childModel(ids[0]), { provider: "anthropic", modelId: "claude-haiku-5-5" });
+    assert.equal(ids.length, 2, "the fallback child above and this one");
+    assert.deepEqual(await childModel(ids[1]), { provider: "anthropic", modelId: "claude-haiku-5-5" });
     await call({ task: "think hard", model: "claude-sonnet-latest" });
     ids = await children();
-    assert.deepEqual(await childModel(ids[1]), { provider: "anthropic", modelId: "claude-sonnet-5-5" });
+    assert.deepEqual(await childModel(ids[2]), { provider: "anthropic", modelId: "claude-sonnet-5-5" });
     process.env.DPI_SUBAGENT_MODEL = "claude-opus-latest";
     await call({ task: "env default" });
     ids = await children();
-    assert.deepEqual(await childModel(ids[2]), { provider: "anthropic", modelId: "claude-opus-5-5" });
+    assert.deepEqual(await childModel(ids[3]), { provider: "anthropic", modelId: "claude-opus-5-5" });
     assert.deepEqual(asked, ["claude-haiku-latest", "claude-sonnet-latest", "claude-opus-latest"]);
     // The parent keeps its own model.
     assert.deepEqual((await store.agentDetail(row, c)).config.model, { provider: "faux", modelId: "echo" });

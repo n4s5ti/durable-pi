@@ -19,7 +19,8 @@ test("pip3r argv: allowlisted subcommands only, --json and --cwd always added, g
   assert.deepEqual(pip3rArgv("graphos", ["--refs=createStore"], D), ["graphos", "--refs=createStore", "--json", "--cwd", D, "--no-auto-index"]);
   assert.deepEqual(pip3rArgv("doctor", ["--typecheck"], D), ["doctor", "--typecheck", "--json", "--cwd", D]);
   assert.deepEqual(pip3rArgv("verify", ["--json"], D), ["verify", "--json", "--cwd", D], "--json is not doubled");
-  assert.deepEqual(pip3rArgv("scout", ["--grep", "-x flag"], D), ["scout", "--grep", "-x flag", "--json", "--cwd", D], "a value may start with -");
+  assert.deepEqual(pip3rArgv("scout", ["--grep=-x flag"], D), ["scout", "--grep=-x flag", "--json", "--cwd", D], "a value that starts with - is written --flag=value");
+  assert.throws(() => pip3rArgv("scout", ["--grep", "-x flag"], D), /may not start with "-"/, "a separate value token is never a flag");
   // Every subcommand gets --json, and every allowlist is free of refused flags.
   for (const sub of PIP3R_SUBCOMMANDS) {
     assert.ok(pip3rArgv(sub, [], D).includes("--json"), sub);

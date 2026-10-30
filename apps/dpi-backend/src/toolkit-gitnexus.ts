@@ -1,13 +1,13 @@
-// gitnexus: read-only code-graph spot checks (impact, callers, paths, flows, read-only Cypher) on a repository GitNexus
-// has already indexed, without bash (the oracle tool set keeps it). It runs the GitNexus CLI (DPI_GITNEXUS_CMD, default
-// `npx -y gitnexus@1.6.12`) argv only, no shell, in a repository folder that must exist.
+// gitnexus: read-only code-graph spot checks (impact, callers, paths, flows) on a repository GitNexus has already
+// indexed, without bash (the oracle tool set keeps it). It runs the GitNexus CLI named by DPI_GITNEXUS_CMD (required,
+// for example `node <install>/node_modules/gitnexus/dist/cli/index.js`) argv only, no shell, in a repository folder
+// that must exist. There is no default: npx and npm read the reviewed repo's .npmrc and would run its code.
 //
-//   commands   GITNEXUS_COMMANDS (query, context, impact, trace, cypher, check, status), the one list to change if names
-//              change. Never analyze, index, clean, remove, setup, serve, mcp, wiki, publish, update, embeddings or group.
+//   commands   GITNEXUS_COMMANDS (query, context, impact, trace, check, status), the one list to change if names
+//              change. Never cypher (a query language is a second parser to get right), analyze, index, clean, remove,
+//              setup, serve, mcp, wiki, publish, update, embeddings or group.
 //   arguments  typed per command, never free argv; options always go as `--flag=value` so a value cannot become a flag,
 //              and a positional (symbol, from, to, query) that starts with "-" is refused
-//   cypher     read only: it must start with MATCH, OPTIONAL MATCH, WITH, UNWIND or RETURN, and any writing or loading
-//              keyword outside string literals is refused; rows are capped with --limit
 //   repo       every call first runs `status --json` in the folder. No index there means a clear "ask for a manual
 //              index" message (this tool never builds one); otherwise the call is pinned to that index with
 //              --repo=<root>, so GitNexus never falls back to another registered repository
@@ -16,29 +16,23 @@ import type { Context } from "@earendil-works/chord";
 import { defineTool, type ToolExecutionApi } from "@earendil-works/pi-durable";
 import { sessionPath, text } from "./toolkit-common.js";
 
-export const GITNEXUS_COMMANDS = ["query", "context", "impact", "trace", "cypher", "check", "status"] as const;
+export const GITNEXUS_COMMANDS = ["query", "context", "impact", "trace", "check", "status"] as const;
 export type GitnexusCommand = (typeof GITNEXUS_COMMANDS)[number];
 
 /** The most output one call hands back; more is cut with a note saying so. */
 export const GITNEXUS_MAX_CHARS = 40_000;
 /** Seconds one GitNexus call may take. */
 export const GITNEXUS_TIMEOUT = 120;
-export const GITNEXUS_DEFAULT_CMD = "npx -y gitnexus@1.6.12";
-/** Rows a cypher call returns at most (and by default). */
-export const CYPHER_MAX_ROWS = 200;
-const CYPHER_DEFAULT_ROWS = 50;
 const MAX_VALUE = 500;
-const MAX_CYPHER = 4000;
 const MAX_CAPTURE = 2_000_000;
 
-/** Keywords that write, load or reach outside the graph; refused anywhere outside a string literal. */
-export const CYPHER_REFUSED = [
-  "CREATE", "MERGE", "DELETE", "DETACH", "SET", "REMOVE", "DROP", "ALTER", "COPY", "LOAD", "CALL", "INSTALL", "ATTACH",
-  "EXPORT", "IMPORT", "CHECKPOINT", "USE", "BEGIN", "COMMIT", "ROLLBACK", "FOREACH",
-];
-
-/** The GitNexus command as argv: DPI_GITNEXUS_CMD split on whitespace, read at each call. */
-export const gitnexusCmd = () => (process.env.DPI_GITNEXUS_CMD?.trim() || GITNEXUS_DEFAULT_CMD).split(/\s+/);
+/** The GitNexus command as argv: DPI_GITNEXUS_CMD split on whitespace, read at each call. Throws when it is unset. */
+export function gitnexusCmd() {
+  const cmd = process.env.DPI_GITNEXUS_CMD?.trim();
+  if (!cmd)
+    throw Error("gitnexus is not set up on this device: DPI_GITNEXUS_CMD must name an installed GitNexus, e.g. `node <install>/node_modules/gitnexus/dist/cli/index.js`. This tool never runs npx.");
+  return cmd.split(/\s+/);
+}
 
 export interface GitnexusParams {
   command: string;
@@ -75,28 +69,9 @@ function int(name: string, v: unknown, min: number, max: number) {
   return String(v);
 }
 
-/** Cypher with string literals and comments blanked out, so keyword checks only see the query's own words. */
-export function cypherSkeleton(query: string) {
-  return query
-    .replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`[^`]*`/g, " '' ")
-    .replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, " ");
-}
-
-/** Throws unless `query` is a single read-only Cypher statement. Exported for tests. */
-export function checkCypher(query: string) {
-  const skeleton = cypherSkeleton(query).trim();
-  if (/['"`]/.test(skeleton.replace(/''/g, ""))) throw Error("cypher has an unclosed string literal");
-  if (!/^(OPTIONAL\s+MATCH|MATCH|WITH|UNWIND|RETURN)\b/i.test(skeleton))
-    throw Error("cypher must be a read query starting with MATCH, OPTIONAL MATCH, WITH, UNWIND or RETURN");
-  if (/;\s*\S/.test(skeleton)) throw Error("cypher must be a single statement");
-  const words = new Set(skeleton.toUpperCase().match(/[A-Z_]+/g) ?? []);
-  const bad = CYPHER_REFUSED.filter((k) => words.has(k));
-  if (bad.length) throw Error(`cypher is refused: ${bad.join(", ")} can write or load data. This tool only reads.`);
-}
-
 /**
  * The argv after the GitNexus binary for one call, from typed parameters. `root` is the indexed repository the call is
- * pinned to (--repo=<root>). Throws on an unknown command, a missing or invalid value, or a write in cypher. Exported
+ * pinned to (--repo=<root>). Throws on an unknown command or a missing or invalid value. Exported
  * for tests.
  */
 export function gitnexusArgv(p: GitnexusParams, root: string): string[] {
@@ -142,13 +117,6 @@ export function gitnexusArgv(p: GitnexusParams, root: string): string[] {
       if (p.depth !== undefined) opt("depth", int("depth", p.depth, 1, 5));
       if (p.include_tests) out.push("--include-tests");
       break;
-    case "cypher": {
-      const q = positional("query", p.query, MAX_CYPHER);
-      checkCypher(q);
-      out.push(q);
-      opt("limit", p.limit === undefined ? String(CYPHER_DEFAULT_ROWS) : int("limit", p.limit, 1, CYPHER_MAX_ROWS));
-      break;
-    }
     case "check":
       out.push("--cycles", "--json");
       break;
@@ -163,7 +131,7 @@ export function gitnexusArgv(p: GitnexusParams, root: string): string[] {
 const isLogLine = (line: string) => {
   try {
     const v = JSON.parse(line) as Record<string, unknown>;
-    return typeof v === "object" && v !== null && "level" in v && "time" in v && "msg" in v;
+    return typeof v === "object" && v !== null && "level" in v && "time" in v; // pino always writes both, msg only with a message
   } catch {
     return false;
   }
@@ -271,8 +239,8 @@ async function exec(api: Pick<ToolExecutionApi, "env">, argv: string[], ctx: Con
 
 /** Run one checked call in `dir`: status first (no index means the no-index message), then the command pinned to it. */
 export async function runGitnexus(api: Pick<ToolExecutionApi, "env">, p: GitnexusParams, dir: string, ctx: Context, shownRepo = dir) {
-  const bin = gitnexusCmd();
   gitnexusArgv(p, dir); // validate everything before anything runs
+  const bin = gitnexusCmd();
   const pre = await exec(api, [...bin, "status", "--json"], ctx, dir, 60);
   const preJson = extractJson(pre.stdout);
   let status: Status | undefined;
@@ -307,7 +275,7 @@ const gitnexus = defineTool({
   description:
     "GitNexus code graph for spot checks, read only, on a repository that is already indexed. impact: what breaks if a symbol changes (target or uid; direction upstream = callers and dependants, downstream = what it uses; depth 1-5). " +
     "context: callers, callees and processes of a symbol. trace: how symbol `from` reaches symbol `to` (shortest call path). query: execution flows for a concept (query text). " +
-    "cypher: a read-only Cypher query (MATCH ... RETURN; writes, CALL and LOAD are refused; rows capped). check: import cycles. status: index freshness. " +
+    "check: import cycles. status: index freshness. " +
     "Caveats: a missing result is not proof of no callers (callbacks passed as properties, cross-language fields and registry dispatch have no edges), so fall back to grep before calling code dead. " +
     "Ambiguous names return candidates: pass file (or kind) or the candidate's uid. Check the staleness field and the Index line every answer starts with: an index behind HEAD misses recent changes, and uncommitted edits are never indexed. " +
     "A folder without an index answers that it needs a manual index; never try to build one (this tool cannot), ask for it.",
@@ -324,8 +292,8 @@ const gitnexus = defineTool({
     from: str("trace: the starting symbol."),
     to: str("trace: the symbol to reach."),
     to_file: str("trace: the to symbol's file, to pick among same-named symbols."),
-    query: str("query: the concept to search for; cypher: the read-only Cypher query."),
-    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: CYPHER_MAX_ROWS, description: "query: processes (max 20); context, impact: symbols per level (max 100); cypher: rows (default 50, max 200)." })),
+    query: str("query: the concept to search for."),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: "query: processes (max 20); context, impact: symbols per level (max 100)." })),
   }),
   replay: "safe",
   execute: async (params, api, ctx) => {

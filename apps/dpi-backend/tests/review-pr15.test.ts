@@ -1,7 +1,8 @@
 // Audit of PR #15 (toolbelt: git diff, pip3r, shared skills, Haiku subagents); see docs/audits/review-pr15.md.
 // Two kinds of test live here:
 //   guard tests   pass today; each one kills a mutant that survived the PR's own suite (M1, M2, M3, M4, M7)
-//   finding tests fail today and are skipped with "finding: <id>"; PR15_FINDINGS=1 runs them to show the failure
+//   finding tests F1-F3 and F5-F8 failed before the fixes and now pass; F4 (a write between the re-check and the rename)
+//                 cannot be closed without a lock, so its comment was corrected and its test stays skipped
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -11,11 +12,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ALLOWED, PIP3R_SUBCOMMANDS, pip3rArgv, REFUSED, type Pip3rSub } from "../src/toolkit-pip3r.js";
 import { sha256, SKILL_FILE_MAX_BYTES, SkillConflict, SkillIndex, SkillInvalid } from "../src/skills.js";
-import { curatedModels, resolveModelAlias } from "../src/model-catalog.js";
-import { subagentModelId } from "../src/extensions.js";
 import { faux, tempStore } from "./helpers.js";
 
-const finding = (id: string) => (process.env.PR15_FINDINGS ? false : `finding: ${id}`);
+const finding = (id: string) => (process.env.PR15_FINDINGS ? false : `finding: ${id} (documented limit)`);
 const who = { session: "audit", agent: "Main" };
 const SKILL = "---\nname: a\ndescription: A test skill.\n---\nBody\n";
 
@@ -139,15 +138,16 @@ test("guard M7: a failed rename leaves the old content in place, the revision wr
 
 // ------------------------------------------------------------------ finding tests (fail today, skipped)
 
-test("F1: the forced --no-auto-index and --json survive a value flag that swallows them", { skip: finding("F1") }, () => {
-  // The tool lets a two-token value start with "-", then checks out.includes(...) for its forced flags.
-  const blast = pip3rArgv("blast", ["createStore", "--path", "--no-auto-index"], "/repo");
-  assert.ok(flagsSeen("blast", blast).includes("--no-auto-index"), `blast would auto-index: ${blast.join(" ")}`);
-  const scout = pip3rArgv("scout", ["--grep", "--json"], "/repo");
-  assert.ok(flagsSeen("scout", scout).includes("--json"), `no --json flag: ${scout.join(" ")}`);
+test("F1: the forced --no-auto-index and --json survive a value flag that would swallow them", () => {
+  // A two-token value may not start with "-", so a flag name can never be passed as a value.
+  assert.throws(() => pip3rArgv("blast", ["createStore", "--path", "--no-auto-index"], "/repo"), /may not start with "-"/);
+  assert.throws(() => pip3rArgv("scout", ["--grep", "--json"], "/repo"), /may not start with "-"/);
+  const blast = pip3rArgv("blast", ["createStore", "--path=--no-auto-index"], "/repo");
+  assert.ok(flagsSeen("blast", blast).includes("--no-auto-index"), blast.join(" "));
+  assert.ok(flagsSeen("blast", blast).includes("--json"), blast.join(" "));
 });
 
-test("F2: a refused flag never reaches pip3r's argv, not even as the next token after a value flag", { skip: finding("F2") }, () => {
+test("F2: a refused flag never reaches pip3r's argv, not even as the next token after a value flag", () => {
   for (const sub of PIP3R_SUBCOMMANDS) {
     const valueFlag = ALLOWED[sub].find((f) => f.endsWith("=") && f.startsWith("--"))!.slice(0, -1);
     for (const refused of Object.keys(REFUSED[sub])) {
@@ -162,7 +162,7 @@ test("F2: a refused flag never reaches pip3r's argv, not even as the next token 
   }
 });
 
-test("F3: SKILL.md's front matter is re-validated even when the patch goes through a references/ symlink to it", { skip: finding("F3") }, () => {
+test("F3: SKILL.md's front matter is re-validated even when the patch goes through a references/ symlink to it", () => {
   const t = skillTree();
   try {
     symlinkSync("../SKILL.md", join(t.root, "a", "references", "self.md"));
@@ -198,26 +198,23 @@ test("F4: a write that lands between the sha re-check and the rename is not sile
   }
 });
 
-test("F5: skill_update never reports a failure after it has already replaced the file", { skip: finding("F5") }, () => {
+test("F5: skill_update never reports a failure after it has already replaced the file", () => {
   const t = skillTree();
   try {
     // The audit line cannot be appended (audit.jsonl is a directory); the rename has already happened by then.
     mkdirSync(join(t.base, "data", "skill-revisions", "audit.jsonl"), { recursive: true });
     const index = t.index();
     const sha = index.view("a").sha256;
-    let threw = false;
-    try {
-      index.update({ name: "a", old_string: "Body", new_string: "Mine", expected_sha256: sha }, who);
-    } catch {
-      threw = true;
-    }
-    if (threw) assert.equal(readFileSync(t.file, "utf8"), SKILL, "the tool said 'Not saved' but the file was changed, with no audit line");
+    const r = index.update({ name: "a", old_string: "Body", new_string: "Mine", expected_sha256: sha }, who);
+    assert.match(r.auditWarning ?? "", /replaced but the audit line could not be written/);
+    assert.equal(readFileSync(t.file, "utf8"), SKILL.replace("Body", "Mine"));
+    assert.equal(r.newSha256, sha256(readFileSync(t.file)));
   } finally {
     t.cleanup();
   }
 });
 
-test("F6: git diff runs no program from the repo's config (filter.<driver>.clean)", { skip: finding("F6") }, async () => {
+test("F6: git diff runs no program from the repo's config (filter.<driver>.clean)", async () => {
   const t = await tempStore();
   const repo = join(t.work, "proj");
   mkdirSync(repo);
@@ -247,19 +244,40 @@ test("F6: git diff runs no program from the repo's config (filter.<driver>.clean
   }
 });
 
-test("F7: the default subagent model resolves on a device whose only provider is OpenRouter", { skip: finding("F7") }, () => {
+test("F7: on a device without the default subagent model, subagent and start_session use the parent's model and say so", async () => {
+  const t = await tempStore();
+  const store = await t.open();
   const saved = process.env.DPI_SUBAGENT_MODEL;
   delete process.env.DPI_SUBAGENT_MODEL;
   try {
-    // jobModel matches the resolved id against the device's model list; an OpenRouter device lists curatedModels ids.
-    const id = resolveModelAlias(subagentModelId());
-    assert.ok(curatedModels.some((m) => m.id === id), `${subagentModelId()} -> ${id} is not an OpenRouter model id; subagent and start_session without model fail`);
+    const s = await store.create({ name: "NoHaiku", cwd: t.work, model: faux });
+    const { row, h, c } = await store.resolveAgent(s.id, "main");
+    const call = async (name: string, args: unknown, n: number) => {
+      const sub = await store.send(c, { content: `tool: ${name} ${JSON.stringify(args)}`, requestId: `f7-${n}` });
+      assert.equal((await store.settled(h, sub.id as number, 20000)).status, "done");
+      const md = (await store.transcript(c, "markdown")).text ?? "";
+      return md.slice(md.lastIndexOf("Tool "));
+    };
+    // The faux device lists no Haiku, as an OpenRouter-only device does not.
+    assert.throws(() => store.jobModel("claude-haiku-latest"), /Unknown model claude-haiku-latest/);
+    const sa = await call("subagent", { task: "say hi" }, 1);
+    assert.match(sa, /claude-haiku-latest is not available on this device, so the parent's model faux\/echo was used/);
+    const kids = (await store.agents(row)).filter((a) => a.kind === "subagent");
+    assert.equal(kids.length, 1);
+    assert.deepEqual((await store.agentDetail(row, (await store.resolveAgent(s.id, String(kids[0].id))).c)).config.model, faux);
+    const ss = await call("start_session", { name: "Fallback", cwd: ".", prompt: "hello" }, 2);
+    assert.match(ss, /Started session "Fallback".*with echo.*parent's model faux\/echo was used/s);
+    // A model named in the call still fails when unknown, without a fallback.
+    assert.match(await call("subagent", { task: "x", model: "gpt-nope" }, 3), /Unknown model gpt-nope/);
+    assert.equal((await store.agents(row)).filter((a) => a.kind === "subagent").length, 1);
   } finally {
     if (saved !== undefined) process.env.DPI_SUBAGENT_MODEL = saved;
+    await store.close();
+    await t.cleanup();
   }
 });
 
-test("F8: an agent set to readOnly is not offered skill_update when the skills add-on is enabled afterwards", { skip: finding("F8") }, async () => {
+test("F8: an agent set to readOnly is not offered skill_update when the skills add-on is enabled afterwards", async () => {
   const t = await tempStore();
   const store = await t.open();
   try {

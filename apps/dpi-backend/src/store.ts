@@ -1203,7 +1203,10 @@ export class Store {
       const rank = (name: string) => ADDON_INFO.findIndex((a) => a.name === name);
       const others = (await c.agent(ctx)).extensions.filter((e) => e.name !== extension.name);
       const next = (enabled ? [...others, extension] : others).sort((a, b) => rank(a.name) - rank(b.name));
+      const { toolSet } = (await this.agentDetail(row, c)).config;
       await c.configure({ extensions: next }, ctx);
+      // The tool set's removals are a list of tools; apply it again so the new extension's writers are dropped too.
+      if (toolSet !== "all") await this.configure(row, c, { toolSet });
     } else if (typeof body.prompt === "string") {
       const prompt = body.prompt;
       if (!PROMPTS.some((p) => p.id === prompt)) throw invalid(`Unknown prompt ${prompt}. Known: ${PROMPTS.map((p) => p.id).join(", ")}`);
