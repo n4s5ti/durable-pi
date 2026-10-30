@@ -2,6 +2,7 @@ import { SharedState } from "./shared-state.js";
 import { MemoryStore, OllamaEmbedder } from "./memory.js";
 import { LibraryStore } from "./library.js";
 import { ExpertiseStore } from "./expertise.js";
+import { SkillIndex } from "./skills.js";
 import type { StateChange } from "../../dpi-sdk/src/app-state.js";
 import type {
   AgentDetail,
@@ -87,6 +88,7 @@ export const WRITE_TOOLS = new Set([
   "remember",
   "forget",
   "expertise_update",
+  "skill_update",
 ]);
 
 /** The oracle's hands: tools that change code or run commands directly. The oracle tool set drops these and keeps
@@ -189,6 +191,8 @@ export class Store {
   library!: LibraryStore;
   /** Each session's self-written expertise document, device-wide (expertise.ts). */
   expertise!: ExpertiseStore;
+  /** The shared skill folders (DPI_SKILL_DIRS), read lazily (skills.ts). */
+  skills!: SkillIndex;
   uid!: string;
   modelList: ModelInfo[] = [];
   /** Curated models the OpenRouter catalog has, and those catalog entries. */
@@ -288,6 +292,7 @@ export class Store {
       store.memory = MemoryStore.open(store.memoryPath, embedder());
       store.library = LibraryStore.open(store.libraryPath, embedder());
       store.expertise = ExpertiseStore.open(store.expertisePath);
+      store.skills = new SkillIndex({ dataDir: store.options.dataDir });
       store.shared.harness.subscribeCommits(() => store.notify());
       for (const row of store.list()) {
         try {
@@ -640,7 +645,9 @@ export class Store {
         memory: this.memory,
         library: this.library,
         expertise: this.expertise,
+        skills: this.skills,
         sessionName,
+        agentName: (id) => this.names(row.id).get(id) ?? (id === 1 ? "Main" : `#${id}`),
       });
       for (const extension of addons.list) registry.install(extension);
       const harness = await Harness.open(

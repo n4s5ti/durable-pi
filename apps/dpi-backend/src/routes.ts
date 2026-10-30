@@ -7,6 +7,7 @@ import { agentStream, deviceStream, sessionStream } from "./streams.js";
 import { idempotent } from "./idempotency.js";
 import { ApiFault, invalid, notFound } from "./errors.js";
 import { ExpertiseConflict, ExpertiseInvalid } from "./expertise.js";
+import { SkillInvalid, SkillNotFound } from "./skills.js";
 import { MEMORY_KINDS, type MemoryKind } from "./memory.js";
 
 type Async = (req: Request, res: Response) => Promise<unknown>;
@@ -138,6 +139,23 @@ export function v1(store: Store) {
   r.delete("/expertise/:name", (req, res) => {
     const body = req.body ?? {};
     res.json(expertise(() => store.expertise.reset(param(req, "name"), { reason: body.reason, expectedRevision: body.expectedRevision })));
+  });
+  // ---------------------------------------------------------- shared skills (skills.ts), read only over HTTP
+  r.get("/skills", (req, res) => {
+    const limit = req.query.limit === undefined ? 10 : int(req.query.limit, "limit");
+    if (limit < 1 || limit > 50) throw invalid("limit must be between 1 and 50");
+    const items = store.skills.search(String(req.query.query ?? ""), limit).map(({ name, description, path, score }) => ({ name, description, path, score }));
+    res.json({ items });
+  });
+  r.get("/skills/:name", (req, res) => {
+    try {
+      const file = typeof req.query.file === "string" && req.query.file ? req.query.file : undefined;
+      res.json(store.skills.view(param(req, "name"), file));
+    } catch (e) {
+      if (e instanceof SkillNotFound) throw notFound(e.message);
+      if (e instanceof SkillInvalid) throw invalid(e.message);
+      throw e;
+    }
   });
   r.delete("/memory/:id", (req, res) => {
     try {

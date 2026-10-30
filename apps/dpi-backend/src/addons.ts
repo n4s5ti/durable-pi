@@ -7,6 +7,7 @@
 //   toolkit              search, todo, documents, web and GitHub tools (toolkit.ts)
 //   ui-tools             read-only views on the live canvas and device-wide UI templates (ui-tools.ts)
 //   expertise            the session's own expertise document, rewritten by its agents after each task (expertise.ts)
+//   skills               the shared skill folders (Hermes, OMP): search, view, and one-lesson patches (skills.ts)
 //
 // A hook runs outside the commit line and can run again after a crash. A hook that asks a person or an outside API
 // must store the answer with `api.memo`, as the Jev guard does. A `safe` tool rerun after a crash skips `beforeTool`.
@@ -22,6 +23,7 @@ import { createMemoryExtension, type MemoryStore } from "./memory.js";
 import { ReloadExtension } from "./reload.js";
 import { createLibraryExtension, type LibraryStore } from "./library.js";
 import { createExpertiseExtension, type ExpertiseStore } from "./expertise.js";
+import { createSkillsExtension, type SkillIndex } from "./skills.js";
 
 const PROMPTS_DIR = join(import.meta.dirname, "../prompts");
 
@@ -143,6 +145,12 @@ export const ADDON_INFO: Omit<HarnessExtensionInfo, "enabled" | "prompts">[] = [
     description:
       "Lessons the agents write from their own past work and rewrite after each task, so they improve themselves (IDD T13, Agent Experts). One markdown document per session, named after it (expertise.sqlite, every revision kept), shown in the system prompt when not empty. Adds expertise_read and expertise_update.",
   },
+  {
+    name: "skills",
+    title: "Shared skills",
+    description:
+      "The skill folders Hermes and OMP share (DPI_SKILL_DIRS). Adds skill_search, skill_view and skill_update (a one-lesson patch with a sha256 check; every old version kept), a short note on using skills, and up to three clearly relevant skills suggested in front of each run.",
+  },
 ];
 
 export function createAddons(opts: {
@@ -151,8 +159,11 @@ export function createAddons(opts: {
   memory: MemoryStore;
   library: LibraryStore;
   expertise: ExpertiseStore;
+  skills: SkillIndex;
   /** The session's current name: the expertise document its agents use. */
   sessionName: () => string;
+  /** An agent's display name in this session, for the skills audit log. */
+  agentName?: (conversationId: number) => string;
 }) {
   const prompts = defineExtension({
     name: "system-prompts",
@@ -196,6 +207,7 @@ export function createAddons(opts: {
   const memory = createMemoryExtension(opts.memory);
   const library = createLibraryExtension(opts.library);
   const expertise = createExpertiseExtension(opts.expertise, opts.sessionName);
+  const skills = createSkillsExtension(opts.skills, { sessionName: opts.sessionName, agentName: opts.agentName });
   const all: Record<string, Extension> = {
     "system-prompts": prompts,
     "jev-damage-control": jev,
@@ -205,8 +217,9 @@ export function createAddons(opts: {
     memory,
     library,
     expertise,
+    skills,
   };
-  return { all, list: [prompts, jev, Toolkit, uiTools, ReloadExtension, memory, library, expertise] };
+  return { all, list: [prompts, jev, Toolkit, uiTools, ReloadExtension, memory, library, expertise, skills] };
 }
 
 export type Addons = ReturnType<typeof createAddons>;
