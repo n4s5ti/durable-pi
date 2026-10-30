@@ -1,6 +1,7 @@
 import { SharedState } from "./shared-state.js";
 import { MemoryStore, OllamaEmbedder } from "./memory.js";
 import { LibraryStore } from "./library.js";
+import { ExpertiseStore } from "./expertise.js";
 import type { StateChange } from "../../dpi-sdk/src/app-state.js";
 import type {
   AgentDetail,
@@ -85,6 +86,7 @@ export const WRITE_TOOLS = new Set([
   "start_session",
   "remember",
   "forget",
+  "expertise_update",
 ]);
 
 /** The oracle's hands: tools that change code or run commands directly. The oracle tool set drops these and keeps
@@ -185,6 +187,8 @@ export class Store {
   memory!: MemoryStore;
   /** The user's course library, device-wide and apart from memory (library.ts). */
   library!: LibraryStore;
+  /** Each session's self-written expertise document, device-wide (expertise.ts). */
+  expertise!: ExpertiseStore;
   uid!: string;
   modelList: ModelInfo[] = [];
   /** Curated models the OpenRouter catalog has, and those catalog entries. */
@@ -209,6 +213,9 @@ export class Store {
   }
   get libraryPath() {
     return join(this.options.dataDir, "library.sqlite");
+  }
+  get expertisePath() {
+    return join(this.options.dataDir, "expertise.sqlite");
   }
   get sessionsDir() {
     return join(this.options.dataDir, "sessions");
@@ -280,6 +287,7 @@ export class Store {
       const embedder = () => (options.provider === "faux" || process.env.DPI_EMBED === "off" ? undefined : new OllamaEmbedder());
       store.memory = MemoryStore.open(store.memoryPath, embedder());
       store.library = LibraryStore.open(store.libraryPath, embedder());
+      store.expertise = ExpertiseStore.open(store.expertisePath);
       store.shared.harness.subscribeCommits(() => store.notify());
       for (const row of store.list()) {
         try {
@@ -618,7 +626,22 @@ export class Store {
       const playground = createPlayground(this.shared, row.id, this.spawnSession, jobs);
       registry.install(playground);
       // Custom extensions are installed but not selected: an agent turns them on in its own selection.
-      const addons = createAddons({ offline: this.options.provider === "faux", shared: this.shared, memory: this.memory, library: this.library });
+      // The expertise add-on uses the document named after the session, read at each use so a rename follows.
+      const sessionName = () => {
+        try {
+          return this.row(row.id).name;
+        } catch {
+          return row.name;
+        }
+      };
+      const addons = createAddons({
+        offline: this.options.provider === "faux",
+        shared: this.shared,
+        memory: this.memory,
+        library: this.library,
+        expertise: this.expertise,
+        sessionName,
+      });
       for (const extension of addons.list) registry.install(extension);
       const harness = await Harness.open(
         await openNodeSqliteStorage(row.dbPath),
@@ -1382,6 +1405,7 @@ export class Store {
     await this.shared?.close();
     this.memory?.close();
     this.library?.close();
+    this.expertise?.close();
     this.unlockShared?.();
     this.catalog.close();
     this.unlockCatalog();
