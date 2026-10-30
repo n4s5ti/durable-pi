@@ -15,5 +15,9 @@ fi
 # Its shebang is `env node`, so node 24 goes first on PATH.
 export PATH="$HOME/.nvm/versions/node/v24.16.0/bin:$PATH"
 export DPI_PIP3R_BIN="${DPI_PIP3R_BIN:-$HOME/.cache/pip3r-wt-dev/packages/runtime/dist/bin/pip3r.js}"
+# gitnexus for the read-only code-graph tool: a pinned install run with node directly, never through npx, because npx
+# obeys the reviewed repository's .npmrc (script-shell, node-options) and would run repository-chosen code
+# (audit docs/audits/review-pr16.md F1).
+export DPI_GITNEXUS_CMD="${DPI_GITNEXUS_CMD:-$HOME/.nvm/versions/node/v24.16.0/bin/node $HOME/.dpi-oracle/tools/gitnexus/node_modules/gitnexus/dist/cli/index.js}"
 cd "$here/apps/dpi-backend"
 exec "$HOME/.nvm/versions/node/v24.16.0/bin/node" node_modules/.bin/tsx src/main.ts
