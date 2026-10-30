@@ -1,6 +1,6 @@
-// Audit of PR #15 (toolbelt: git diff, pip3r, shared skills, Haiku subagents); see docs/audits/review-pr15.md.
+// Audit of PR #15 (toolbelt: git diff, shared skills, Haiku subagents); see docs/audits/review-pr15.md.
 // Two kinds of test live here:
-//   guard tests   pass today; each one kills a mutant that survived the PR's own suite (M1, M2, M3, M4, M7)
+//   guard tests   pass today; each one kills a mutant that survived the PR's own suite (M1, M2, M3, M7)
 //   finding tests fail today and are skipped with "finding: <id>"; PR15_FINDINGS=1 runs them to show the failure
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -9,7 +9,6 @@ import fs, { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, real
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ALLOWED, PIP3R_SUBCOMMANDS, pip3rArgv, REFUSED, type Pip3rSub } from "../src/toolkit-pip3r.js";
 import { sha256, SKILL_FILE_MAX_BYTES, SkillConflict, SkillIndex, SkillInvalid } from "../src/skills.js";
 import { curatedModels, resolveModelAlias } from "../src/model-catalog.js";
 import { subagentModelId } from "../src/extensions.js";
@@ -41,19 +40,6 @@ function withFs<K extends "renameSync" | "fsyncSync">(name: K, impl: (orig: (typ
     fs[name] = orig;
     syncBuiltinESMExports();
   }
-}
-
-/** The flags pip3r would see in an argv if, as the tool assumes, a value flag always takes the next token. */
-function flagsSeen(sub: Pip3rSub, argv: string[]) {
-  const takesValue = new Set(ALLOWED[sub].filter((f) => f.endsWith("=")).map((f) => f.slice(0, -1)));
-  const flags: string[] = [];
-  for (let i = 1; i < argv.length; i++) {
-    const a = argv[i];
-    if (!a.startsWith("-")) continue;
-    flags.push(a.split("=")[0]);
-    if (!a.includes("=") && (takesValue.has(a) || a === "--cwd")) i++;
-  }
-  return flags;
 }
 
 // ------------------------------------------------------------------ guard tests (pass today)
@@ -112,11 +98,6 @@ test("guard M3: files over SKILL_FILE_MAX_BYTES are refused by view and update",
   }
 });
 
-test("guard M4: a positional argument with NUL, CR or LF, or over 1000 characters, never reaches pip3r", () => {
-  for (const bad of ["sym\nbol", "sym\rbol", "sym\0bol", "s".repeat(1001)])
-    assert.throws(() => pip3rArgv("blast", [bad], "/repo"), /Invalid argument/, JSON.stringify(bad.slice(0, 10)));
-});
-
 test("guard M7: a failed rename leaves the old content in place, the revision written and no temp file", () => {
   const t = skillTree();
   try {
@@ -138,29 +119,6 @@ test("guard M7: a failed rename leaves the old content in place, the revision wr
 });
 
 // ------------------------------------------------------------------ finding tests (fail today, skipped)
-
-test("F1: the forced --no-auto-index and --json survive a value flag that swallows them", { skip: finding("F1") }, () => {
-  // The tool lets a two-token value start with "-", then checks out.includes(...) for its forced flags.
-  const blast = pip3rArgv("blast", ["createStore", "--path", "--no-auto-index"], "/repo");
-  assert.ok(flagsSeen("blast", blast).includes("--no-auto-index"), `blast would auto-index: ${blast.join(" ")}`);
-  const scout = pip3rArgv("scout", ["--grep", "--json"], "/repo");
-  assert.ok(flagsSeen("scout", scout).includes("--json"), `no --json flag: ${scout.join(" ")}`);
-});
-
-test("F2: a refused flag never reaches pip3r's argv, not even as the next token after a value flag", { skip: finding("F2") }, () => {
-  for (const sub of PIP3R_SUBCOMMANDS) {
-    const valueFlag = ALLOWED[sub].find((f) => f.endsWith("=") && f.startsWith("--"))!.slice(0, -1);
-    for (const refused of Object.keys(REFUSED[sub])) {
-      let argv: string[] | undefined;
-      try {
-        argv = pip3rArgv(sub, [valueFlag, refused], "/repo");
-      } catch {
-        continue;
-      }
-      assert.ok(!argv.includes(refused), `pip3r ${sub} receives ${refused}: ${argv.join(" ")}`);
-    }
-  }
-});
 
 test("F3: SKILL.md's front matter is re-validated even when the patch goes through a references/ symlink to it", { skip: finding("F3") }, () => {
   const t = skillTree();

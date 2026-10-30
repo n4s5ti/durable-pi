@@ -1,3 +1,5 @@
+pip3r/gitnexus wrapper findings resolved by removal in PR #21
+
 # Blind review: PR #16, read-only gitnexus code-graph tool
 
 - Diff under review: `git diff 38d2094^1 38d2094` (merged into `feat/oracle`; head of `feat/oracle` at review time `7f0fc16`).
