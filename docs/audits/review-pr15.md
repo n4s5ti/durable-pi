@@ -1,3 +1,5 @@
+pip3r/gitnexus wrapper findings resolved by removal in PR #21
+
 # Blind review: PR #15, "Spot-check toolbelt, shared skills and Haiku subagents"
 
 - Diff reviewed: `git diff d0d55ad^1 d0d55ad` (merge of `feat/toolbelt` into `feat/oracle`), 16 files, +1579/−34.
