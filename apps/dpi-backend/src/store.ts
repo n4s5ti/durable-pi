@@ -44,6 +44,7 @@ import { BACKGROUND_CONTEXT as ctx, withAbortSignal } from "@earendil-works/chor
 import { createModels } from "@earendil-works/pi-ai/models";
 import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { anthropicDefaultModelId, anthropicModels, curatedModels, defaultModelId, resolveModelAlias } from "./model-catalog.js";
 import { FileCredentialStore } from "./credentials.js";
 import { fauxModels, installFaux } from "./faux.js";
@@ -115,6 +116,8 @@ export interface StoreOptions {
   provider: "openrouter" | "faux";
   /** pi-ai credential file (auth.json); an `anthropic` entry adds the direct Anthropic models. */
   authFile?: string;
+  /** DPI_PROVIDERS: limit the other pi-ai providers to these ids; unset = every provider with a credential. */
+  providers?: string[];
 }
 
 /** Agent documents a client may read or stream, by kind. */
@@ -197,6 +200,8 @@ export class Store {
   modelList: ModelInfo[] = [];
   /** Curated models the OpenRouter catalog has, and those catalog entries. */
   private present: (typeof curatedModels)[number][] = [...curatedModels];
+  /** Other pi-ai providers with a credential (env API key, or an auth.json entry), with their models. */
+  private extra = new Map<string, ModelInfo[]>();
   private catalogModels: ReturnType<ReturnType<typeof openrouterProvider>["getModels"]> = [];
   private unlockCatalog: () => void;
   private unlockShared?: () => void;
@@ -285,6 +290,7 @@ export class Store {
     // Start dirs are where new sessions begin; create any that do not exist yet.
     await Promise.all(options.startDirs.map((dir) => mkdir(dir, { recursive: true }).catch(() => {})));
     try {
+      await store.registerProviders();
       store.unlockShared = lockFile(`${store.sharedStatePath}.lock`);
       store.shared = await SharedState.open(store.sharedStatePath);
       // Semantic recall embeds with local Ollama; off for the faux provider (tests) or with DPI_EMBED=off.
@@ -349,6 +355,36 @@ export class Store {
     return this.present.some((c) => c.id === defaultModelId) ? defaultModelId : this.present[0].id;
   }
 
+  /** Registers each pi-ai provider (besides openrouter and anthropic, handled above) that has a credential. */
+  private async registerProviders() {
+    if (this.options.provider === "faux") return;
+    const only = this.options.providers;
+    for (const provider of builtinProviders()) {
+      if (provider.id === "openrouter" || provider.id === "anthropic" || (only && !only.includes(provider.id))) continue;
+      this.models.setProvider(provider);
+      try {
+        const available = await this.models.getAvailable(provider.id, { signal: AbortSignal.timeout(10000) });
+        if (available.length)
+          this.extra.set(
+            provider.id,
+            available.map((m) => ({
+              id: m.id,
+              provider: provider.id,
+              name: m.name,
+              tier: "-",
+              icon: "lab.png",
+              contextWindow: m.contextWindow,
+              reasoning: m.reasoning,
+              cost: { input: m.cost.input, output: m.cost.output },
+            })),
+          );
+      } catch (e) {
+        console.error(`[models] ${provider.id} left out:`, e instanceof Error ? e.message : e);
+      }
+    }
+    if (this.extra.size) console.log(`[models] providers with a credential: ${[...this.extra.keys()].join(", ")}`);
+  }
+
   private async loadModels(): Promise<ModelInfo[]> {
     if (this.options.provider === "faux")
       return fauxModels.map((m) => ({
@@ -404,7 +440,7 @@ export class Store {
             },
           ]
         : [];
-    }));
+    })).concat([...this.extra.values()].flat());
   }
 
   routedModel(model?: ModelRef): ModelRef {
@@ -412,6 +448,8 @@ export class Store {
       const id = fauxModels.some((m) => m.id === model?.modelId) ? model!.modelId : fauxModels[0].id;
       return { provider: "faux", modelId: id };
     }
+    if (this.extra.get(model?.provider ?? "")?.some((m) => m.id === model?.modelId))
+      return { provider: model!.provider, modelId: model!.modelId };
     if (this.anthropic && model?.provider === "anthropic" && anthropicModels.some((m) => m.id === model.modelId))
       return { provider: "anthropic", modelId: model.modelId };
     if (this.anthropic && model?.provider !== "openrouter")
@@ -424,10 +462,10 @@ export class Store {
   }
 
   /** A device model by its id alone, for a job phase's subagent (`GET /v1/device` lists the ids). */
-  /** A device model id (or a `claude-<family>-latest` alias) as a model ref; an unknown id throws, naming the choices. */
+  /** A device model id (or a `claude-<family>-latest` alias, or `<provider>/<id>`) as a model ref; an unknown id throws, naming the choices. */
   jobModel(id: string): ModelRef {
     const resolved = resolveModelAlias(id);
-    const m = this.modelList.find((x) => x.id === resolved);
+    const m = this.modelList.find((x) => x.id === resolved) ?? this.modelList.find((x) => `${x.provider}/${x.id}` === resolved);
     if (!m)
       throw invalid(`Unknown model ${id}${resolved !== id ? ` (${resolved})` : ""}. Choose one of: ${this.modelList.map((x) => x.id).join(", ")}`);
     return this.validateModel({ provider: m.provider, modelId: m.id });
@@ -443,9 +481,9 @@ export class Store {
         ? m.provider === "faux" && fauxModels.some((f) => f.id === m.modelId)
         : m.provider === "anthropic"
           ? this.anthropic && anthropicModels.some((c) => c.id === m.modelId) && !!this.models.getModel(m.provider, m.modelId)
-          : m.provider === "openrouter" &&
-            this.present.some((c) => c.id === m.modelId) &&
-            !!this.models.getModel(m.provider, m.modelId);
+          : m.provider === "openrouter"
+            ? this.present.some((c) => c.id === m.modelId) && !!this.models.getModel(m.provider, m.modelId)
+            : !!this.extra.get(m.provider)?.some((c) => c.id === m.modelId) && !!this.models.getModel(m.provider, m.modelId);
     if (!known) throw invalid(`Unknown model ${ref.provider}/${ref.modelId}. Choose one from GET /v1/device models`);
     return { provider: m.provider, modelId: m.modelId };
   }

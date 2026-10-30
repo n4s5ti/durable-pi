@@ -68,6 +68,10 @@ Every agent gets the coding tools `read`, `write`, `edit` and `bash`, plus the p
 
 `subagent {task, model?}` and `start_session {name, cwd, model?, prompt?}` run the delegated agent on `DPI_SUBAGENT_MODEL` (read at each call), by default `claude-haiku-latest`; pass `model` (for example `claude-sonnet-latest` when the task needs more reasoning) to pick another. Wherever a device model id is taken (these tools, job `model` inputs, and anthropic `{provider, modelId}` in session creation and agent config), the aliases `claude-haiku-latest`, `claude-sonnet-latest` and `claude-opus-latest` resolve to the newest model of that family in the device's Anthropic catalog (now `claude-haiku-5-5`, `claude-sonnet-5-5`, `claude-opus-5-5`). An id the device does not offer fails the call with the ids to choose from; nothing falls back to another model, so a device without the subscription (or the faux provider) needs `DPI_SUBAGENT_MODEL` or an explicit `model`.
 
+### Model providers
+
+`GET /v1/device` `models` lists the curated OpenRouter models, the Anthropic models when `auth.json` holds an `anthropic` credential, and every other pi-ai provider (Groq, DeepSeek, Cerebras, Mistral, Gemini, NVIDIA, `openai-codex`, ...) that has a credential at startup: its API key env var (`GROQ_API_KEY`, `DEEPSEEK_API_KEY`, ...) is set, or `<DPI_HOME>/auth.json` (`DPI_AUTH_FILE`) has an entry for it (`pi-ai login <provider>` for OAuth providers). `DPI_PROVIDERS` (comma list, for example `groq,deepseek`) limits these additional providers; unset offers all of them. Use such a model as `{provider: "groq", modelId: "openai/gpt-oss-120b"}` or, where a bare device model id is taken, by its `id` or `<provider>/<id>` (an id two providers share resolves to the first listed). Providers without a credential are not offered; an unknown model fails with the ids to choose from. Restart the device after adding a key.
+
 ### Spot-check tools (toolkit)
 
 The toolkit's read-only tools stay in every tool set, `oracle` and `readOnly` included, so an agent that delegates can review the work without bash.
