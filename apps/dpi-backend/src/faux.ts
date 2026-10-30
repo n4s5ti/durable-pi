@@ -70,7 +70,9 @@ export function installFaux(models: MutableModels) {
   const reply: FauxResponseFactory = (context) => {
     handle.appendResponses([reply]);
     const messages = context.messages as unknown as AnyMessage[];
-    const last = messages.at(-1);
+    // A section that changed mid-run (expertise_update, remember feedback) adds a system message after the tool result;
+    // look past it, or the faux model would answer the user's prompt again and repeat the tool call.
+    const last = messages.findLast((m) => m.role !== "system");
     const adw = /^adw-(plan|build|review|fix|improve):/.exec(textOf(messages.find((m) => m.role === "user")).trim())?.[1];
     if (adw) return fauxAdw(adw as keyof typeof ADW_ACTIONS, last);
     if (last?.role === "toolResult")

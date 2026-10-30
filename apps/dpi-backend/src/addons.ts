@@ -6,6 +6,7 @@
 //   jev-damage-control   Jev judges every bash command before it runs and blocks destructive ones
 //   toolkit              search, todo, documents, web and GitHub tools (toolkit.ts)
 //   ui-tools             read-only views on the live canvas and device-wide UI templates (ui-tools.ts)
+//   expertise            the session's own expertise document, rewritten by its agents after each task (expertise.ts)
 //
 // A hook runs outside the commit line and can run again after a crash. A hook that asks a person or an outside API
 // must store the answer with `api.memo`, as the Jev guard does. A `safe` tool rerun after a crash skips `beforeTool`.
@@ -20,6 +21,7 @@ import { createUiTools } from "./ui-tools.js";
 import { createMemoryExtension, type MemoryStore } from "./memory.js";
 import { ReloadExtension } from "./reload.js";
 import { createLibraryExtension, type LibraryStore } from "./library.js";
+import { createExpertiseExtension, type ExpertiseStore } from "./expertise.js";
 
 const PROMPTS_DIR = join(import.meta.dirname, "../prompts");
 
@@ -135,9 +137,23 @@ export const ADDON_INFO: Omit<HarnessExtensionInfo, "enabled" | "prompts">[] = [
     description:
       "Bags' long-term memory (memory.sqlite on this device), shared with Hermes. Recalls matching memories into each run, puts the user's standing feedback in front of every request, and adds remember, recall and forget.",
   },
+  {
+    name: "expertise",
+    title: "Expertise",
+    description:
+      "Lessons the agents write from their own past work and rewrite after each task, so they improve themselves (IDD T13, Agent Experts). One markdown document per session, named after it (expertise.sqlite, every revision kept), shown in the system prompt when not empty. Adds expertise_read and expertise_update.",
+  },
 ];
 
-export function createAddons(opts: { offline: boolean; shared: SharedState; memory: MemoryStore; library: LibraryStore }) {
+export function createAddons(opts: {
+  offline: boolean;
+  shared: SharedState;
+  memory: MemoryStore;
+  library: LibraryStore;
+  expertise: ExpertiseStore;
+  /** The session's current name: the expertise document its agents use. */
+  sessionName: () => string;
+}) {
   const prompts = defineExtension({
     name: "system-prompts",
     sections: [
@@ -179,6 +195,7 @@ export function createAddons(opts: { offline: boolean; shared: SharedState; memo
   const uiTools = createUiTools(opts.shared);
   const memory = createMemoryExtension(opts.memory);
   const library = createLibraryExtension(opts.library);
+  const expertise = createExpertiseExtension(opts.expertise, opts.sessionName);
   const all: Record<string, Extension> = {
     "system-prompts": prompts,
     "jev-damage-control": jev,
@@ -187,8 +204,9 @@ export function createAddons(opts: { offline: boolean; shared: SharedState; memo
     reload: ReloadExtension,
     memory,
     library,
+    expertise,
   };
-  return { all, list: [prompts, jev, Toolkit, uiTools, ReloadExtension, memory, library] };
+  return { all, list: [prompts, jev, Toolkit, uiTools, ReloadExtension, memory, library, expertise] };
 }
 
 export type Addons = ReturnType<typeof createAddons>;

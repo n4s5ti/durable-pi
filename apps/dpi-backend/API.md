@@ -24,6 +24,10 @@ The contract every Durable Agent Network client uses: the web hub, `dpi-tui`, sc
 | `GET /v1/library/stats` | | `{total, bySource, byKind, byLesson, pendingEmbeddings?, embedError?}` |
 | `POST /v1/library/import` | `{items:[{source, lesson, kind: transcript\|doc, ref, text, originId}]}` (≤1000 items; the 256 KB body limit means batches of about 250) | `{added, skipped, invalid, errors}`; a known `originId` is skipped, so imports are idempotent. To re-chunk a source, wipe it first |
 | `DELETE /v1/library` | `?source=` (required) | `{source, deleted}`: removes every passage of that source |
+| `GET /v1/expertise/:name` | | `{name, content, revision, updatedAt}`: the expertise document of the session called `:name` (matched case-insensitively; `name` comes back lower case). A name never written returns `{name, content: "", revision: 0, updatedAt: null}`, never 404 |
+| `PUT /v1/expertise/:name` | `{content, reason, expectedRevision?}` | `{name, revision, updatedAt}`: replaces the whole document (markdown, ≤8000 characters) as a new revision. `reason` is required (≤500 characters). Too long, a missing reason or a bad `expectedRevision` returns `400 invalid`; an `expectedRevision` that is not the current revision returns `409 conflict` |
+| `GET /v1/expertise/:name/revisions` | `?limit=` (default 20, max 200) | `{items:[{revision, reason, createdAt, chars}]}` newest first; every write is kept with its full content |
+| `DELETE /v1/expertise/:name` | `{reason, expectedRevision?}` | `{name, revision}`: empties the document as a new revision; the history stays |
 | `GET /v1/docs/app.shared-state` | | `{kind, value, revision}` |
 | `GET /v1/sessions` | | `SessionSummary[]` |
 | `POST /v1/sessions` | `{name, cwd, model:{provider,modelId}, thinkingLevel?}` | `201 SessionSummary` |
@@ -61,6 +65,10 @@ Every agent gets the coding tools `read`, `write`, `edit` and `bash`, plus the p
 ## Course library
 
 `oracle/library_ingest.py` turns the course transcripts (WEBVTT) and docs (markdown) into passages of about 250 words and imports them with `POST /v1/library/import`. Agents with the `library` add-on get `library_recall {query, lesson?, limit≤8}`, and each run gets the two best passages in front of the user's message when their cosine similarity clears `DPI_LIBRARY_MIN_SIMILARITY` (default 0.62; keyword-only: most query words present). `DPI_LIBRARY_AUTO_RECALL=off` keeps the tool and drops the automatic passages.
+
+## Expertise
+
+The `expertise` add-on (off by default) gives a session's agents a document of lessons they write from their own work and rewrite after each task (IDD T13, Agent Experts). The document is named after the session (`oracle`, `exam`), so two sessions never see each other's, and it lives in `expertise.sqlite` (mode 600), apart from memory and the library. While it is not empty, each request's system prompt carries it under `# Your expertise`. It is read from the store at every request, so a `PUT /v1/expertise/:name` shows on the agent's next request. Tools: `expertise_read {}` (reads) and `expertise_update {content, reason}` (rewrites the whole document; over 8000 characters it is refused with a message saying how much to cut). `expertise_update` writes, so `readOnly` drops it and the `oracle` set keeps it.
 
 ## Durable jobs
 

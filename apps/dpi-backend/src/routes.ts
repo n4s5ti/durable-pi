@@ -5,7 +5,8 @@ import type { Conversation, Harness } from "@earendil-works/pi-durable";
 import { DEVICE_DOC_KINDS, type SessionRow, type Store } from "./store.js";
 import { agentStream, deviceStream, sessionStream } from "./streams.js";
 import { idempotent } from "./idempotency.js";
-import { invalid, notFound } from "./errors.js";
+import { ApiFault, invalid, notFound } from "./errors.js";
+import { ExpertiseConflict, ExpertiseInvalid } from "./expertise.js";
 import { MEMORY_KINDS, type MemoryKind } from "./memory.js";
 
 type Async = (req: Request, res: Response) => Promise<unknown>;
@@ -110,6 +111,33 @@ export function v1(store: Store) {
     const source = typeof req.query.source === "string" ? req.query.source.trim() : "";
     if (!source) throw invalid("source is required, e.g. ?source=idd");
     res.json(store.library.wipe(source));
+  });
+  // ---------------------------------------------------------- expertise (expertise.ts): one document per session name
+  const expertise = <T>(fn: () => T) => {
+    try {
+      return fn();
+    } catch (e) {
+      if (e instanceof ExpertiseConflict) throw new ApiFault("conflict", e.message);
+      if (e instanceof ExpertiseInvalid) throw invalid(e.message);
+      throw e;
+    }
+  };
+  r.get("/expertise/:name", (req, res) => {
+    const { name, content, revision, updatedAt } = expertise(() => store.expertise.get(param(req, "name")));
+    res.json({ name, content, revision, updatedAt });
+  });
+  r.get("/expertise/:name/revisions", (req, res) => {
+    const limit = req.query.limit === undefined ? 20 : int(req.query.limit, "limit");
+    if (limit < 1) throw invalid("limit must be at least 1");
+    res.json({ items: expertise(() => store.expertise.revisions(param(req, "name"), limit)) });
+  });
+  r.put("/expertise/:name", (req, res) => {
+    const body = req.body ?? {};
+    res.json(expertise(() => store.expertise.update(param(req, "name"), { content: body.content, reason: body.reason, expectedRevision: body.expectedRevision })));
+  });
+  r.delete("/expertise/:name", (req, res) => {
+    const body = req.body ?? {};
+    res.json(expertise(() => store.expertise.reset(param(req, "name"), { reason: body.reason, expectedRevision: body.expectedRevision })));
   });
   r.delete("/memory/:id", (req, res) => {
     try {
