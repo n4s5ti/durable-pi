@@ -16,4 +16,11 @@ fi
 # GitNexus 1.6.12 install. Both shebangs are `env node`, so node 24 goes first.
 export PATH="$HOME/.dpi-oracle/bin:$HOME/.nvm/versions/node/v24.16.0/bin:$PATH"
 cd "$here/apps/dpi-backend"
-exec "$HOME/.nvm/versions/node/v24.16.0/bin/node" node_modules/.bin/tsx src/main.ts
+# The runner starts Claude cloud sessions through the real claude binary (mise's command wrapper fails in a pty).
+export DPI_CLAUDE_BIN="${DPI_CLAUDE_BIN:-$HOME/.local/share/mise/installs/claude/latest/claude}"
+# Model provider keys (GROQ_API_KEY, DEEPSEEK_API_KEY, ...) come from Bitwarden Secrets Manager, injected by `bws run`
+# into this process only (bws strips its own token from the child). AGENTMAIL_API_KEY lives in the same project but is
+# not a provider key, so it is removed before the backend (and the oracle's bash) can see it.
+exec env BWS_ACCESS_TOKEN="$(cat "$HOME/.config/bws/access-token")" \
+  bws run --project-id b7e80205-45d5-4c9b-bfff-b4ef00e284e9 -- \
+  "exec env -u AGENTMAIL_API_KEY \"$HOME/.nvm/versions/node/v24.16.0/bin/node\" node_modules/.bin/tsx src/main.ts"
