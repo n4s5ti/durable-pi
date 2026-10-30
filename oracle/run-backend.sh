@@ -11,5 +11,9 @@ if [ -z "${OPENROUTER_API_KEY:-}" ]; then
   OPENROUTER_API_KEY="$(sed -n 's/^OPENROUTER_API_KEY=//p' "$HOME/.dpi/backend.env" | tail -1)"
   export OPENROUTER_API_KEY
 fi
+# pip3r for the read-only spot-check tool: a clean build of pip3r `dev` (the user's own pip3r stays on his checkout).
+# Its shebang is `env node`, so node 24 goes first on PATH.
+export PATH="$HOME/.nvm/versions/node/v24.16.0/bin:$PATH"
+export DPI_PIP3R_BIN="${DPI_PIP3R_BIN:-$HOME/.cache/pip3r-wt-dev/packages/runtime/dist/bin/pip3r.js}"
 cd "$here/apps/dpi-backend"
 exec "$HOME/.nvm/versions/node/v24.16.0/bin/node" node_modules/.bin/tsx src/main.ts
