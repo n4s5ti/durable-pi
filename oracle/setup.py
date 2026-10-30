@@ -34,7 +34,7 @@ if "oracle-all" not in agents:
 for name, tool_set in (("main", "oracle"), ("oracle-all", "all")):
     cfg = api("PATCH", f"/v1/sessions/{sid}/agents/{name}/config",
               {"model": MODEL, "instructions": charter, "cwd": CWD, "toolSet": tool_set})
-    for addon in ("memory", "library", "expertise"):
+    for addon in ("memory", "library", "expertise", "skills"):
         ext = api("PATCH", f"/v1/sessions/{sid}/agents/{name}/extensions", {"name": addon, "enabled": True})
     enabled = [e["name"] for e in ext["extensions"] if e["enabled"]]
     print(f"{name}: toolSet={cfg.get('toolSet')} model={cfg['model']['modelId']} cwd={cfg['cwd']} extensions={enabled} "
