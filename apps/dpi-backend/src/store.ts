@@ -2,6 +2,7 @@ import { SharedState } from "./shared-state.js";
 import { MemoryStore, OllamaEmbedder } from "./memory.js";
 import { LibraryStore } from "./library.js";
 import { ExpertiseStore } from "./expertise.js";
+import { SkillIndex } from "./skills.js";
 import type { StateChange } from "../../dpi-sdk/src/app-state.js";
 import type {
   AgentDetail,
@@ -43,7 +44,7 @@ import { BACKGROUND_CONTEXT as ctx, withAbortSignal } from "@earendil-works/chor
 import { createModels } from "@earendil-works/pi-ai/models";
 import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
-import { anthropicDefaultModelId, anthropicModels, curatedModels, defaultModelId } from "./model-catalog.js";
+import { anthropicDefaultModelId, anthropicModels, curatedModels, defaultModelId, resolveModelAlias } from "./model-catalog.js";
 import { FileCredentialStore } from "./credentials.js";
 import { fauxModels, installFaux } from "./faux.js";
 import {
@@ -87,6 +88,7 @@ export const WRITE_TOOLS = new Set([
   "remember",
   "forget",
   "expertise_update",
+  "skill_update",
 ]);
 
 /** The oracle's hands: tools that change code or run commands directly. The oracle tool set drops these and keeps
@@ -189,6 +191,8 @@ export class Store {
   library!: LibraryStore;
   /** Each session's self-written expertise document, device-wide (expertise.ts). */
   expertise!: ExpertiseStore;
+  /** The shared skill folders (DPI_SKILL_DIRS), read lazily (skills.ts). */
+  skills!: SkillIndex;
   uid!: string;
   modelList: ModelInfo[] = [];
   /** Curated models the OpenRouter catalog has, and those catalog entries. */
@@ -288,6 +292,7 @@ export class Store {
       store.memory = MemoryStore.open(store.memoryPath, embedder());
       store.library = LibraryStore.open(store.libraryPath, embedder());
       store.expertise = ExpertiseStore.open(store.expertisePath);
+      store.skills = new SkillIndex({ dataDir: store.options.dataDir });
       store.shared.harness.subscribeCommits(() => store.notify());
       for (const row of store.list()) {
         try {
@@ -419,16 +424,20 @@ export class Store {
   }
 
   /** A device model by its id alone, for a job phase's subagent (`GET /v1/device` lists the ids). */
+  /** A device model id (or a `claude-<family>-latest` alias) as a model ref; an unknown id throws, naming the choices. */
   jobModel(id: string): ModelRef {
-    const m = this.modelList.find((x) => x.id === id);
-    if (!m) throw invalid(`Unknown model ${id}. Choose one of: ${this.modelList.map((x) => x.id).join(", ")}`);
+    const resolved = resolveModelAlias(id);
+    const m = this.modelList.find((x) => x.id === resolved);
+    if (!m)
+      throw invalid(`Unknown model ${id}${resolved !== id ? ` (${resolved})` : ""}. Choose one of: ${this.modelList.map((x) => x.id).join(", ")}`);
     return this.validateModel({ provider: m.provider, modelId: m.id });
   }
 
   validateModel(model: unknown): ModelRef {
-    const m = model as ModelRef | undefined;
-    if (!m || typeof m.provider !== "string" || typeof m.modelId !== "string")
+    const ref = model as ModelRef | undefined;
+    if (!ref || typeof ref.provider !== "string" || typeof ref.modelId !== "string")
       throw invalid("model must be { provider, modelId }");
+    const m = ref.provider === "anthropic" ? { provider: ref.provider, modelId: resolveModelAlias(ref.modelId) } : ref;
     const known =
       this.options.provider === "faux"
         ? m.provider === "faux" && fauxModels.some((f) => f.id === m.modelId)
@@ -437,7 +446,7 @@ export class Store {
           : m.provider === "openrouter" &&
             this.present.some((c) => c.id === m.modelId) &&
             !!this.models.getModel(m.provider, m.modelId);
-    if (!known) throw invalid(`Unknown model ${m.provider}/${m.modelId}. Choose one from GET /v1/device models`);
+    if (!known) throw invalid(`Unknown model ${ref.provider}/${ref.modelId}. Choose one from GET /v1/device models`);
     return { provider: m.provider, modelId: m.modelId };
   }
 
@@ -623,7 +632,7 @@ export class Store {
       registry.install(CodingTools);
       const jobs = createJobs({ shared: this.shared, sessionId: row.id, resolveModel: (id) => this.jobModel(id) });
       const compaction = () => this.compactionOf(row.id);
-      const playground = createPlayground(this.shared, row.id, this.spawnSession, jobs);
+      const playground = createPlayground(this.shared, row.id, this.spawnSession, jobs, (id) => this.jobModel(id));
       registry.install(playground);
       // Custom extensions are installed but not selected: an agent turns them on in its own selection.
       // The expertise add-on uses the document named after the session, read at each use so a rename follows.
@@ -640,7 +649,9 @@ export class Store {
         memory: this.memory,
         library: this.library,
         expertise: this.expertise,
+        skills: this.skills,
         sessionName,
+        agentName: (id) => this.names(row.id).get(id) ?? (id === 1 ? "Main" : `#${id}`),
       });
       for (const extension of addons.list) registry.install(extension);
       const harness = await Harness.open(

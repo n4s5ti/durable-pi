@@ -134,6 +134,8 @@ test("sessions, browse, names, forks, jobs, restart recovery, approval, interrup
 test("start_session: an agent starts an independent session, once per tool call", async () => {
   const t = await tempStore();
   const store = await t.open();
+  // Delegated sessions default to claude-haiku-latest, which a faux device does not have; name its model.
+  process.env.DPI_SUBAGENT_MODEL = faux.modelId;
   try {
     const parent = await store.create({ name: "Parent", cwd: "project", model: faux, thinkingLevel: "minimal" });
     const { h, c } = await store.resolveAgent(parent.id, "main");
@@ -141,7 +143,7 @@ test("start_session: an agent starts an independent session, once per tool call"
     const answer = await store.settled(h, sent.id as number, 15000);
     assert.equal(answer.status, "done");
 
-    // Relative cwd resolves against the parent's folder; model and thinking level come from the parent.
+    // Relative cwd resolves against the parent's folder; the model is DPI_SUBAGENT_MODEL's, the thinking level the parent's.
     const child = store.list().find((r) => r.name === "Child");
     assert.ok(child, "Child session exists");
     assert.equal(child.cwd, join(t.work, "project"));
@@ -162,6 +164,7 @@ test("start_session: an agent starts an independent session, once per tool call"
     assert.equal(prompted.submissionId, replayed.submissionId, "the first prompt is admitted once");
     assert.equal(store.list().filter((r) => r.name === "Idle" || r.name === "Prompted").length, 2);
   } finally {
+    delete process.env.DPI_SUBAGENT_MODEL;
     await store.close();
     await t.cleanup();
   }
@@ -183,7 +186,7 @@ test("custom extensions: jev-damage-control blocks rm -rf only while on; system-
       JSON.stringify((await store.entries(c, undefined, 500)).items.filter((e) => e.kind === "pi.system").slice(0, 1));
 
     let ext = await store.extensionsOf(row, c);
-    assert.deepEqual(ext.extensions.map((e) => [e.name, e.enabled]), [["system-prompts", false], ["jev-damage-control", false], ["toolkit", true], ["ui-tools", false], ["reload", false], ["library", false], ["memory", false], ["expertise", false]]);
+    assert.deepEqual(ext.extensions.map((e) => [e.name, e.enabled]), [["system-prompts", false], ["jev-damage-control", false], ["toolkit", true], ["ui-tools", false], ["reload", false], ["library", false], ["memory", false], ["expertise", false], ["skills", false]]);
     assert.deepEqual(ext.builtIn.sort(), ["coding-tools", "playground"]);
     assert.deepEqual(ext.extensions[0].prompts?.map((p) => [p.id, p.enabled]), [["smart_ass_opus_fix.md", true], ["one_sentence.md", false]]);
 
@@ -210,13 +213,13 @@ test("custom extensions: jev-damage-control blocks rm -rf only while on; system-
     assert.doesNotMatch(await systemText(), /Clear, Concise, Actionable Communication/);
     // Extensions stack: turning one on keeps the other on.
     ext = await store.setExtension(row, c, { name: "jev-damage-control", enabled: true });
-    assert.deepEqual(ext.extensions.map((e) => [e.name, e.enabled]), [["system-prompts", true], ["jev-damage-control", true], ["toolkit", true], ["ui-tools", false], ["reload", false], ["library", false], ["memory", false], ["expertise", false]]);
+    assert.deepEqual(ext.extensions.map((e) => [e.name, e.enabled]), [["system-prompts", true], ["jev-damage-control", true], ["toolkit", true], ["ui-tools", false], ["reload", false], ["library", false], ["memory", false], ["expertise", false], ["skills", false]]);
     assert.deepEqual(ext.builtIn, ["coding-tools", "playground"]);
     await mkdir(join(t.work, "doomed"));
     await turn("!rm -rf doomed");
     assert.ok(existsSync(join(t.work, "doomed")));
     ext = await store.setExtension(row, c, { name: "system-prompts", enabled: false });
-    assert.deepEqual(ext.extensions.map((e) => e.enabled), [false, true, true, false, false, false, false, false]);
+    assert.deepEqual(ext.extensions.map((e) => e.enabled), [false, true, true, false, false, false, false, false, false]);
     await assert.rejects(() => store.setExtension(row, c, { name: "nope", enabled: true }), /Unknown extension/);
   } finally {
     await store.close();
