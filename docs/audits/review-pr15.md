@@ -51,7 +51,7 @@
 
 ## Mutation testing
 
-`node mutate.mjs` replaces one guard, runs the named test file, then restores the source. The full script is in the PR description.
+`node mutate.mjs` replaces one guard, runs the named test file, then restores the source. The runner is in the PR description, and each mutant is described below.
 
 | Id | Mutant | PR #15's suite | With `review-pr15.test.ts` |
 |---|---|---|---|
