@@ -15,10 +15,10 @@ export function clip(value: string, max = MAX_TEXT, hint = "") {
 }
 
 /** Run a program (argv, no shell) in the call's environment; its stdout and stderr arrive merged. */
-export async function run(api: Pick<ToolExecutionApi, "env">, argv: string[], ctx: Context, timeout = 30) {
+export async function run(api: Pick<ToolExecutionApi, "env">, argv: string[], ctx: Context, timeout = 30, cwd?: string) {
   if (!api.env) throw Error("This session has no execution environment");
   let out = "";
-  const result = await api.env.exec(argv, { timeout, onOutput: (chunk) => void (out.length < MAX_OUTPUT && (out += chunk)) }, ctx);
+  const result = await api.env.exec(argv, { timeout, ...(cwd ? { cwd } : {}), onOutput: (chunk) => void (out.length < MAX_OUTPUT && (out += chunk)) }, ctx);
   if (!result.ok) {
     if (result.error.code === "spawn_error") throw Error(`Could not run ${argv[0]}; is it installed on this device? ${result.error.message}`);
     throw Error(`${argv[0]}: ${result.error.message}`);

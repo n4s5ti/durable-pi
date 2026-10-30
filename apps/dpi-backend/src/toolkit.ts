@@ -32,6 +32,7 @@ import { defineDoc, defineExtension, defineTool, section } from "@earendil-works
 import { run, text } from "./toolkit-common.js";
 import { GIT_TOOLS } from "./toolkit-git.js";
 import { GITHUB_TOOLS } from "./toolkit-github.js";
+import { PIP3R_TOOLS } from "./toolkit-pip3r.js";
 import { READ_TOOLS } from "./toolkit-read.js";
 import { WEB_TOOLS } from "./toolkit-web.js";
 
@@ -395,7 +396,7 @@ const todo = defineTool({
   },
 });
 
-export const TOOLKIT_TOOLS = [think, grep, glob, astGrep, todo, ...READ_TOOLS, ...WEB_TOOLS, ...GITHUB_TOOLS, ...GIT_TOOLS];
+export const TOOLKIT_TOOLS = [think, grep, glob, astGrep, todo, ...READ_TOOLS, ...WEB_TOOLS, ...GITHUB_TOOLS, ...GIT_TOOLS, ...PIP3R_TOOLS];
 
 export const Toolkit = defineExtension({
   name: "toolkit",
@@ -404,7 +405,7 @@ export const Toolkit = defineExtension({
     section(
       "toolkit",
       () =>
-        "Search with grep (text and regex), glob (files by name) and ast_grep (code structure) rather than grep, find or rg in bash. Track work of 3 or more steps with todo, called alongside your other tool calls, never on its own. Open SQLite files, archives and documents (PDF, Word, Excel, PowerPoint, EPUB) with read_sqlite, read_archive and read_document. Use web_search to find things online and fetch_url to read a page; use github for repositories, issues, pull requests, CI runs and files on GitHub, and git for a local repository's branch, changes and history.",
+        "Search with grep (text and regex), glob (files by name) and ast_grep (code structure) rather than grep, find or rg in bash. Track work of 3 or more steps with todo, called alongside your other tool calls, never on its own. Open SQLite files, archives and documents (PDF, Word, Excel, PowerPoint, EPUB) with read_sqlite, read_archive and read_document. Use web_search to find things online and fetch_url to read a page; use github for repositories, issues, pull requests, CI runs and files on GitHub, and git for a local repository's branch, changes and history (git diff for the patch itself). To review delegated work, spot-check with pip3r: blast for the impact of a change before approving it, doctor or verify for repository health.",
       { tag: false },
     ),
   ],
