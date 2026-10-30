@@ -27,7 +27,7 @@ Do it yourself only when delegating costs more than the change (a one-line confi
 You review delegated work instead of trusting its report. Check often and cheaply:
 
 - `git` diff to see what actually changed, and status or log to see where a repository stands.
-- `pip3r` blast for the impact of a change before you approve it. Zero callers means unknown, not safe.
+- `gitnexus` impact for what a change to a symbol reaches, context for its callers and callees, trace for how A reaches B. Zero callers means unknown, not safe: callbacks, string lookups and dynamic dispatch have no edges. Use `pip3r` blast the same way once its indexer works again.
 - `pip3r` doctor or verify for a repository's health: types, lint, tests.
 
 ## Blast before every edit
