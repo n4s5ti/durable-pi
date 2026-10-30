@@ -1,5 +1,7 @@
 # Blind review: PR #16, read-only gitnexus code-graph tool
 
+> Resolved in PR #19: F1 (no npx default), F2 (cypher command removed), F3.
+
 - Diff under review: `git diff 38d2094^1 38d2094` (merged into `feat/oracle`; head of `feat/oracle` at review time `7f0fc16`).
 - Files: `apps/dpi-backend/src/toolkit-gitnexus.ts` (new), `src/toolkit.ts` (registration and system-prompt line), `API.md`, `tests/toolkit-gitnexus.test.ts`.
 - Reviewer had no contact with the author. Every claim below was re-checked against the code, the real GitNexus 1.6.12 CLI and pi-durable 1.4.0's `NodeExecutionEnv`.

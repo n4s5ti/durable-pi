@@ -1,5 +1,7 @@
 # Blind review: PR #15, "Spot-check toolbelt, shared skills and Haiku subagents"
 
+> Resolved in PR #19: F1-F3 and F5-F8. F4 is a documented limit (comment corrected, no lock).
+
 - Diff reviewed: `git diff d0d55ad^1 d0d55ad` (merge of `feat/toolbelt` into `feat/oracle`), 16 files, +1579/−34.
 - Reviewed on `feat/oracle` at `7f0fc16`. PR #16 (gitnexus tool) came after it; gitnexus is only in scope for question 5.
 - Tests added: `apps/dpi-backend/tests/review-pr15.test.ts`. Production code is unchanged.
