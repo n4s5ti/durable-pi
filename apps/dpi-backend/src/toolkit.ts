@@ -30,7 +30,10 @@
 //   pip3r                                      toolkit-pip3r.ts: read-only spot checks through the pip3r CLI
 //   gitnexus                                   toolkit-gitnexus.ts: read-only code-graph lookups through GitNexus
 import { Type } from "@earendil-works/pi-ai";
-import { defineDoc, defineExtension, defineTool, section } from "@earendil-works/pi-durable";
+import { defineDoc, defineExtension, defineTool, section, type ToolExecutionApi } from "@earendil-works/pi-durable";
+import type { Context } from "@earendil-works/chord";
+import { nameFromTask, runOf, type DelegationEngine } from "./delegations.js";
+import { subagentModelId } from "./runner.js";
 import { run, text } from "./toolkit-common.js";
 import { GIT_TOOLS } from "./toolkit-git.js";
 import { GITHUB_TOOLS } from "./toolkit-github.js";
@@ -220,16 +223,39 @@ const astGrep = defineTool({
 
 // ------------------------------------------------------------------ todo
 
-export type TodoStatus = "pending" | "active" | "done" | "blocked" | "dropped";
-export type TodoTask = { content: string; status: TodoStatus; reason?: string };
+export type TodoStatus = "pending" | "active" | "done" | "blocked" | "dropped" | "running";
+/** What the runner recorded for a trigger todo's agent: where it runs, its link, and the result once it is done. */
+export type TodoRun = {
+  id: number;
+  backend: "local" | "cloud";
+  model: string;
+  backendReason?: string;
+  sessionId?: string;
+  url?: string;
+  conversationId?: number;
+  result?: string;
+  startedAt: number;
+  endedAt?: number;
+};
+/**
+ * A plain todo is a checklist item Bags starts and finishes himself. A trigger todo (`kind: "trigger"`) carries a
+ * complete instruction that was sent to an agent when it was added: it is `running` while the agent works, then `done`
+ * (the result is in `run.result`) or `blocked` (the reason is in `reason`). It never takes the active slot.
+ */
+export type TodoTask = { content: string; status: TodoStatus; reason?: string; kind?: "trigger"; instruction?: string; run?: TodoRun };
 export type TodoPhase = { name: string; tasks: TodoTask[] };
 export type TodoArgs = {
-  op: "init" | "start" | "done" | "rm" | "drop" | "block" | "unblock" | "append" | "view";
+  op: "init" | "start" | "done" | "rm" | "drop" | "block" | "unblock" | "append" | "view" | "trigger";
   list?: { phase: string; items: string[] }[];
   items?: string[];
   task?: string;
   phase?: string;
   reason?: string;
+  instruction?: string;
+  model?: string;
+  cwd?: string;
+  /** Set by the todo tool once the runner has started the agent; not a tool parameter. */
+  run?: TodoRun;
 };
 
 export const TodoList = defineDoc<{ phases: TodoPhase[] }>({
@@ -250,20 +276,31 @@ const TodoReceipt = defineDoc<{ applied: boolean; result: string }>({
   checkpointWhen: () => false,
 });
 
-const MARK: Record<TodoStatus, string> = { pending: "[ ]", active: "[>]", done: "[x]", blocked: "[!]", dropped: "[-]" };
+const MARK: Record<TodoStatus, string> = { pending: "[ ]", active: "[>]", done: "[x]", blocked: "[!]", dropped: "[-]", running: "[~]" };
+
+const oneLine = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s).replace(/\s+/g, " ");
+
+/** A trigger todo's tail in `todo view`: where it runs, its link, and the result once it is done. */
+function renderRun(t: TodoTask) {
+  const run = t.run;
+  if (!run) return "";
+  const where = `${run.backend} ${run.model}${run.url ? ` ${run.url}` : run.sessionId ? ` ${run.sessionId}` : run.conversationId !== undefined ? ` agent #${run.conversationId}` : ""}`;
+  return ` {${t.status === "running" ? "running on " : ""}${where}${t.status === "done" && run.result ? `; result: ${oneLine(run.result, 300)}` : ""}}`;
+}
 
 export function renderTodo(phases: TodoPhase[]) {
   if (!phases.length) return "No tasks.";
   const all = phases.flatMap((p) => p.tasks).filter((t) => t.status !== "dropped");
   const lines = phases.flatMap((p) => [
     p.name,
-    ...p.tasks.map((t) => `  ${MARK[t.status]} ${t.content}${t.status === "blocked" && t.reason ? ` (blocked: ${t.reason})` : ""}`),
+    ...p.tasks.map((t) => `  ${MARK[t.status]} ${t.content}${t.status === "blocked" && t.reason ? ` (blocked: ${t.reason})` : ""}${renderRun(t)}`),
   ]);
   return [...lines, `${all.filter((t) => t.status === "done").length}/${all.length} done`].join("\n");
 }
 
 /** The rules after a change: with nothing active the earliest pending task starts; only one stays active. */
 function settle(phases: TodoPhase[], started?: TodoTask) {
+  // Only plain tasks are ever active or pending: a trigger todo is running, done or blocked, so it never takes the slot.
   const tasks = phases.flatMap((p) => p.tasks);
   const active = tasks.filter((t) => t.status === "active");
   const keep = started ?? active[0];
@@ -296,9 +333,24 @@ export function applyTodo(current: TodoPhase[], args: TodoArgs): TodoPhase[] {
       seen.add(c);
     }
   };
+  const plainOnly = (t: TodoTask, verb: string) => {
+    if (t.kind === "trigger")
+      throw Error(`"${t.content}" is a trigger todo: its agent started when it was added. ${verb} does not apply; use the delegation tool to escalate, steer or stop it, or done, block, drop or rm.`);
+  };
   switch (args.op) {
     case "view":
       return phases;
+    case "trigger": {
+      if (!args.instruction?.trim()) throw Error("trigger needs instruction: the complete instruction for the agent");
+      if (!args.task) throw Error("trigger needs task: the todo's text");
+      if (!args.run) throw Error("trigger has no run: the runner did not start an agent");
+      unique([args.task]);
+      const name = args.phase ?? phases.at(-1)?.name ?? "Tasks";
+      let phase = phases.find((p) => p.name === name);
+      if (!phase) phases.push((phase = { name, tasks: [] }));
+      phase.tasks.push({ content: args.task, status: "running", kind: "trigger", instruction: args.instruction, run: args.run });
+      return settle(phases);
+    }
     case "init": {
       const list = args.list?.length ? args.list : args.items?.length ? [{ phase: args.phase ?? "Tasks", items: args.items }] : [];
       if (!list.length) throw Error("init needs list: [{phase, items}] or items");
@@ -320,18 +372,19 @@ export function applyTodo(current: TodoPhase[], args: TodoArgs): TodoPhase[] {
     }
     case "start": {
       const t = find(args.task);
+      plainOnly(t, "start");
       if (t.status === "done") throw Error(`"${t.content}" is already done`);
       t.status = "active";
       delete t.reason;
       return settle(phases, t);
     }
     case "done": {
-      if (!args.task && args.phase) for (const t of phaseOf(args.phase).tasks) t.status === "dropped" || (t.status = "done");
+      if (!args.task && args.phase) for (const t of phaseOf(args.phase).tasks) t.status === "dropped" || t.status === "running" || (t.status = "done");
       else find(args.task).status = "done";
       return settle(phases);
     }
     case "drop": {
-      if (!args.task && args.phase) for (const t of phaseOf(args.phase).tasks) t.status === "done" || (t.status = "dropped");
+      if (!args.task && args.phase) for (const t of phaseOf(args.phase).tasks) t.status === "done" || t.status === "running" || (t.status = "dropped");
       else {
         const t = find(args.task);
         if (t.status !== "done") t.status = "dropped";
@@ -355,6 +408,7 @@ export function applyTodo(current: TodoPhase[], args: TodoArgs): TodoPhase[] {
     }
     case "unblock": {
       const t = find(args.task);
+      plainOnly(t, "unblock");
       if (t.status !== "blocked") throw Error(`"${t.content}" is not blocked`);
       t.status = "pending";
       delete t.reason;
@@ -363,53 +417,103 @@ export function applyTodo(current: TodoPhase[], args: TodoArgs): TodoPhase[] {
   }
 }
 
-const todo = defineTool({
-  name: "todo",
-  description: `Keep a phased task list for this conversation; it survives restarts and shows your progress.
+/** What the todo tool needs to start a trigger todo's agent; the session provides it (delegations.ts). */
+export type TodoHost = Pick<DelegationEngine, "plan" | "start">;
+
+/** The trigger op: the runner starts the agent in the todo call's own commit, so a rerun never starts a second one. */
+async function triggerTodo(host: TodoHost | undefined, args: TodoArgs, api: ToolExecutionApi, ctx: Context) {
+  if (!host) throw Error("Trigger todos are not available to this agent");
+  // Starting an agent is delegation, so an agent that cannot delegate (a read only or worker agent) cannot trigger.
+  if (!(await api.agent(ctx)).tools.some((t) => t.name === "subagent"))
+    throw Error("trigger needs the subagent tool, which this agent is not offered");
+  const instruction = args.instruction?.trim();
+  if (!instruction) throw Error("trigger needs instruction: the complete instruction for the agent");
+  const label = args.task?.trim() || nameFromTask(instruction);
+  const plan = await host.plan(api, ctx, {
+    source: "todo",
+    label,
+    instruction,
+    model: args.model?.trim() || subagentModelId(),
+    cwd: args.cwd?.trim() || undefined,
+    todo: label,
+    key: `todo:${api.taskId}`,
+  });
+  const now = Date.now();
+  return api.commit(async (tx) => {
+    const receipt = await tx.doc(TodoReceipt, api.taskId);
+    if (receipt.applied) return receipt.result;
+    const doc = await tx.doc(TodoList, api.conversationId);
+    const d = await host.start(tx, api.conversationId, plan, now);
+    doc.phases = applyTodo(doc.phases, { ...args, task: label, instruction, run: runOf(d) });
+    receipt.applied = true;
+    receipt.result = renderTodo(doc.phases);
+    return receipt.result;
+  }, ctx);
+}
+
+/** The todo tool. With a host (a session's delegation engine) it also takes trigger todos. */
+export const makeTodoTool = (host?: TodoHost) =>
+  defineTool({
+    name: "todo",
+    description: `Keep a phased task list for this conversation; it survives restarts and shows your progress.
 - Never spend a turn on todo alone: call it alongside your next real tool call (init beside the first read, done/start beside the next action).
 - init before work with 3 or more steps or a list of requests; list every requested item separately. init replaces the list.
 - Tasks are named by their exact text, never by made-up ids. If unsure of the text, view.
 - After each change: with nothing active the earliest pending task starts, and only one task is active. Mark tasks done as soon as they are.
 - block a task waiting on a person, agent or service (with reason); unblock it when it can move. Blocked tasks never start on their own.
-- drop keeps a task visible as abandoned; rm deletes it. done, drop and rm take phase instead of task for a whole phase.`,
-  parameters: Type.Object({
-    op: Type.Union(["init", "start", "done", "rm", "drop", "block", "unblock", "append", "view"].map((o) => Type.Literal(o))),
-    list: Type.Optional(
-      Type.Array(Type.Object({ phase: Type.String(), items: Type.Array(Type.String()) }), { description: "Phases for init" }),
-    ),
-    items: Type.Optional(Type.Array(Type.String(), { description: "Tasks for append, or for a one-phase init" })),
-    task: Type.Optional(Type.String({ description: "The task's exact text" })),
-    phase: Type.Optional(Type.String({ description: "Phase name: where append adds, or a whole phase for done, drop and rm" })),
-    reason: Type.Optional(Type.String({ description: "What a blocked task waits for" })),
-  }),
-  replay: "safe",
-  execute: async (args, api, ctx) => {
-    const op = args as TodoArgs;
-    if (op.op === "view") return text(renderTodo((await api.snapshot(TodoList, api.conversationId, ctx))?.phases ?? []));
-    const result = await api.commit(async (tx) => {
-      const receipt = await tx.doc(TodoReceipt, api.taskId);
-      if (receipt.applied) return receipt.result;
-      const doc = await tx.doc(TodoList, api.conversationId);
-      doc.phases = applyTodo(doc.phases, op);
-      receipt.applied = true;
-      receipt.result = renderTodo(doc.phases);
-      return receipt.result;
-    }, ctx);
-    return text(result);
-  },
-});
+- drop keeps a task visible as abandoned; rm deletes it. done, drop and rm take phase instead of task for a whole phase.
+- Two kinds of todo. A plain todo (init, append) is a checklist item you start and finish yourself. A trigger todo (op trigger) carries a complete instruction, with optional model and cwd, and starts an agent on it at once: you need no further turn. It shows running, then done with the agent's result, or blocked with the reason it failed; you decide what happens next (the delegation tool: escalate to a stronger model, steer, stop). It runs beside the active plain todo and never takes its slot. Write the instruction so the agent needs nothing else: it sees only that text. Where it runs is not yours to choose.`,
+    parameters: Type.Object({
+      op: Type.Union(["init", "start", "done", "rm", "drop", "block", "unblock", "append", "view", "trigger"].map((o) => Type.Literal(o))),
+      list: Type.Optional(
+        Type.Array(Type.Object({ phase: Type.String(), items: Type.Array(Type.String()) }), { description: "Phases for init" }),
+      ),
+      items: Type.Optional(Type.Array(Type.String(), { description: "Tasks for append, or for a one-phase init" })),
+      task: Type.Optional(Type.String({ description: "The task's exact text. For trigger: the new todo's text (default: the first line of the instruction)" })),
+      phase: Type.Optional(Type.String({ description: "Phase name: where append or trigger adds, or a whole phase for done, drop and rm" })),
+      reason: Type.Optional(Type.String({ description: "What a blocked task waits for" })),
+      instruction: Type.Optional(Type.String({ description: "trigger only: the complete instruction the agent is started with" })),
+      model: Type.Optional(Type.String({ description: "trigger only: a device model id or alias (claude-haiku-latest, claude-sonnet-latest, claude-opus-latest). Default: claude-haiku-latest" })),
+      cwd: Type.Optional(Type.String({ description: "trigger only: the folder the agent works in. Default: your working directory" })),
+    }),
+    replay: "safe",
+    execute: async (args, api, ctx) => {
+      const op = args as TodoArgs;
+      if (op.op === "view") return text(renderTodo((await api.snapshot(TodoList, api.conversationId, ctx))?.phases ?? []));
+      if (op.op === "trigger") return text(await triggerTodo(host, op, api, ctx));
+      const result = await api.commit(async (tx) => {
+        const receipt = await tx.doc(TodoReceipt, api.taskId);
+        if (receipt.applied) return receipt.result;
+        const doc = await tx.doc(TodoList, api.conversationId);
+        doc.phases = applyTodo(doc.phases, op);
+        receipt.applied = true;
+        receipt.result = renderTodo(doc.phases);
+        return receipt.result;
+      }, ctx);
+      return text(result);
+    },
+  });
+
+const todo = makeTodoTool();
 
 export const TOOLKIT_TOOLS = [think, grep, glob, astGrep, todo, ...READ_TOOLS, ...WEB_TOOLS, ...GITHUB_TOOLS, ...GIT_TOOLS, ...PIP3R_TOOLS, ...GITNEXUS_TOOLS];
 
-export const Toolkit = defineExtension({
-  name: "toolkit",
-  tools: TOOLKIT_TOOLS,
-  sections: [
-    section(
-      "toolkit",
-      () =>
-        "Search with grep (text and regex), glob (files by name) and ast_grep (code structure) rather than grep, find or rg in bash. Track work of 3 or more steps with todo, called alongside your other tool calls, never on its own. Open SQLite files, archives and documents (PDF, Word, Excel, PowerPoint, EPUB) with read_sqlite, read_archive and read_document. Use web_search to find things online and fetch_url to read a page; use github for repositories, issues, pull requests, CI runs and files on GitHub, and git for a local repository's branch, changes and history (git diff for the patch itself). To review delegated work, spot-check with gitnexus on the code graph (impact of a change before approving it, context for a symbol's callers, trace for how one symbol reaches another) and pip3r (doctor or verify for repository health).",
-      { tag: false },
-    ),
-  ],
-});
+/** The toolkit extension. A session passes its delegation engine so its todo tool takes trigger todos. */
+export const createToolkit = (host?: TodoHost) =>
+  defineExtension({
+    name: "toolkit",
+    tools: host ? TOOLKIT_TOOLS.map((t) => (t === todo ? makeTodoTool(host) : t)) : TOOLKIT_TOOLS,
+    sections: [
+      section(
+        "toolkit",
+        () =>
+          "Search with grep (text and regex), glob (files by name) and ast_grep (code structure) rather than grep, find or rg in bash. Track work of 3 or more steps with todo, called alongside your other tool calls, never on its own. Open SQLite files, archives and documents (PDF, Word, Excel, PowerPoint, EPUB) with read_sqlite, read_archive and read_document. Use web_search to find things online and fetch_url to read a page; use github for repositories, issues, pull requests, CI runs and files on GitHub, and git for a local repository's branch, changes and history (git diff for the patch itself). To review delegated work, spot-check with gitnexus on the code graph (impact of a change before approving it, context for a symbol's callers, trace for how one symbol reaches another) and pip3r (doctor or verify for repository health)." +
+          (host
+            ? " Hand work to an agent with a trigger todo (todo op trigger, a complete instruction): it starts at once and the todo shows running, then done with its result or blocked with the reason. Where it runs is not your decision."
+            : ""),
+        { tag: false },
+      ),
+    ],
+  });
+
+export const Toolkit = createToolkit();

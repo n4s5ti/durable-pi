@@ -65,6 +65,8 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { createPlayground, Workspace, type SpawnSession } from "./extensions.js";
 import { createJobs, JobRuns, JOB_DEFS, jobDef, resolveJobInput, type Jobs } from "./jobs.js";
+import { createDelegations, Delegations } from "./delegations.js";
+import { createRunner } from "./runner.js";
 import { ADDON_INFO, createAddons, PROMPTS, PromptChecklist, type Addons } from "./addons.js";
 import { UiViews, viewsOf } from "./ui-tools.js";
 import { TodoList } from "./toolkit.js";
@@ -85,6 +87,7 @@ export const WRITE_TOOLS = new Set([
   "ping_on_call_engineer",
   "subagent",
   "start_session",
+  "delegation",
   "remember",
   "forget",
   "expertise_update",
@@ -120,7 +123,7 @@ export interface StoreOptions {
 /** Agent documents a client may read or stream, by kind. */
 /** apps/dpi-backend/src → the checkout root. */
 const CODE_DIR = resolve(import.meta.dirname, "../../..");
-const AGENT_DOCS = { [JOB_RUNS_DOC]: JobRuns, "demo.workspace": Workspace, "toolkit.todo": TodoList, [RELOAD_DOC]: ReloadSignal } as const;
+const AGENT_DOCS = { [JOB_RUNS_DOC]: JobRuns, "demo.workspace": Workspace, "toolkit.todo": TodoList, "dpi.delegations": Delegations, [RELOAD_DOC]: ReloadSignal } as const;
 export const AGENT_DOC_KINDS = Object.keys(AGENT_DOCS);
 export const DEVICE_DOC_KINDS = ["app.shared-state"];
 
@@ -178,6 +181,8 @@ const decodeCursor = (cursor?: string) => {
 
 export class Store {
   readonly models: ReturnType<typeof createModels>;
+  /** Where delegated work runs: reads DPI_RUNNER_CODE and DPI_CLAUDE_BIN at each use. */
+  readonly runner = createRunner();
   /** True when auth.json holds an Anthropic credential (API key or Claude subscription OAuth). */
   readonly anthropic: boolean;
   readonly opened = new Map<string, Opened>();
@@ -632,7 +637,13 @@ export class Store {
       registry.install(CodingTools);
       const jobs = createJobs({ shared: this.shared, sessionId: row.id, resolveModel: (id) => this.jobModel(id) });
       const compaction = () => this.compactionOf(row.id);
-      const playground = createPlayground(this.shared, row.id, this.spawnSession, jobs, (id) => this.jobModel(id));
+      // One runner decides where delegated work runs; the engine records it and drives trigger todos.
+      const delegations = createDelegations({
+        runner: this.runner,
+        resolveModel: (id) => this.jobModel(id),
+        nameAgent: (id, name) => this.nameAgent(row.id, id, name),
+      });
+      const playground = createPlayground(this.shared, row.id, this.spawnSession, jobs, (id) => this.jobModel(id), delegations);
       registry.install(playground);
       // Custom extensions are installed but not selected: an agent turns them on in its own selection.
       // The expertise add-on uses the document named after the session, read at each use so a rename follows.
@@ -651,6 +662,7 @@ export class Store {
         expertise: this.expertise,
         skills: this.skills,
         sessionName,
+        todoHost: delegations,
         agentName: (id) => this.names(row.id).get(id) ?? (id === 1 ? "Main" : `#${id}`),
       });
       for (const extension of addons.list) registry.install(extension);
@@ -870,6 +882,19 @@ export class Store {
       })),
       extensions: agent.extensions.map((e) => e.name),
     };
+  }
+
+  /** Name an agent after its task, unless a person named it already. */
+  private nameAgent(sessionId: string, agentId: number, name: string) {
+    if (!name.trim() || /^\d+$/.test(name.trim()) || name.trim().toLowerCase() === "main") return;
+    try {
+      this.catalog
+        .prepare("INSERT INTO conversation_names VALUES(?,?,?) ON CONFLICT(sessionId,conversationId) DO NOTHING")
+        .run(sessionId, agentId, name.trim().slice(0, 100));
+      this.notify();
+    } catch {
+      // The session was archived while its child was starting.
+    }
   }
 
   setAgentName(row: SessionRow, agentId: number, name: unknown) {

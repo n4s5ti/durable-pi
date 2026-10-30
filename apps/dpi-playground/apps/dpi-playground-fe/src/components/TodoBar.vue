@@ -5,8 +5,10 @@
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { agentState } from "../client/store";
 
-type Status = "pending" | "active" | "done" | "blocked" | "dropped";
-type Task = { content: string; status: Status; reason?: string };
+type Status = "pending" | "active" | "done" | "blocked" | "dropped" | "running";
+// A trigger todo's agent (kind "trigger"): `running` while it works, then `done` with run.result or `blocked` with reason.
+type Run = { backend?: string; url?: string; result?: string };
+type Task = { content: string; status: Status; reason?: string; kind?: string; run?: Run };
 type Phase = { name: string; tasks: Task[] };
 type Row = { kind: "phase"; name: string } | { kind: "task"; n: number; task: Task };
 
@@ -23,7 +25,7 @@ const visible = computed(() => tasks.value.length > 0 && count("done") < tasks.v
 const header = computed(() => {
   const parts = [
     count("done") && `${count("done")} done`,
-    count("active") && `${count("active")} in progress`,
+    count("active", "running") && `${count("active", "running")} in progress`,
     count("pending", "blocked") && `${count("pending", "blocked")} open`,
   ].filter(Boolean);
   return `${tasks.value.length} tasks (${parts.join(", ")})`;
@@ -52,7 +54,7 @@ const now = ref(Date.now());
 const since = reactive(new Map<string, number>());
 let timer: ReturnType<typeof setInterval> | undefined;
 watch(
-  () => tasks.value.filter((t) => t.status === "active").map((t) => t.content),
+  () => tasks.value.filter((t) => t.status === "active" || t.status === "running").map((t) => t.content),
   (active) => {
     for (const k of [...since.keys()]) if (!active.includes(k)) since.delete(k);
     for (const k of active) if (!since.has(k)) since.set(k, Date.now());
@@ -83,15 +85,16 @@ const elapsed = (content: string) => {
     <div class="tw-line tw-accent">{{ `● ${header}` }}</div>
     <template v-for="r in shown" :key="r.kind === 'phase' ? `p:${r.name}` : `t:${r.n}`">
       <div v-if="r.kind === 'phase'" class="tw-line tw-dim tw-phase">{{ r.name }}</div>
-      <div v-else-if="r.task.status === 'active'" class="tw-line">
+      <div v-else-if="r.task.status === 'active' || r.task.status === 'running'" class="tw-line">
         <span class="tw-accent">{{ SPINNER[frame % SPINNER.length] }}</span
         ><span class="tw-dim">{{ ` #${r.n} ` }}</span
         ><span class="tw-accent">{{ `${r.task.content}…` }}</span
-        ><span class="tw-dim">{{ ` (${elapsed(r.task.content)})` }}</span>
+        ><span class="tw-dim">{{ ` (${r.task.run?.backend ? `${r.task.run.backend}, ` : ""}${elapsed(r.task.content)})` }}</span>
       </div>
       <div v-else-if="r.task.status === 'done'" class="tw-line">
         <span class="tw-success">✓</span
-        >{{ " " }}<s class="tw-dim">{{ `#${r.n} ${r.task.content}` }}</s>
+        >{{ " " }}<s class="tw-dim">{{ `#${r.n} ${r.task.content}` }}</s
+        ><span v-if="r.task.run?.result" class="tw-dim">{{ ` › ${r.task.run.result.replace(/\s+/g, " ").slice(0, 120)}` }}</span>
       </div>
       <div v-else class="tw-line">
         <span>◻</span><span class="tw-dim">{{ ` #${r.n} ` }}</span

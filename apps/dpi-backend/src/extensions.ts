@@ -1,6 +1,5 @@
 import type { SharedState } from "./shared-state.js";
 import { Type } from "@earendil-works/pi-ai";
-import { isAbsolute, resolve } from "node:path";
 import { readState, type AppState } from "../../dpi-sdk/src/app-state.js";
 import type { SessionSummary, ThinkingLevel } from "../../dpi-sdk/src/api.js";
 import { THINKING_LEVELS } from "../../dpi-sdk/src/api.js";
@@ -13,12 +12,17 @@ import {
   section,
   configure,
   AssistantEntry,
+  type ConversationId,
   type EntryRecord,
   type ToolExecutionApi,
 } from "@earendil-works/pi-durable";
-import type { Context } from "@earendil-works/chord";
+import type { Context, JsonValue } from "@earendil-works/chord";
 import { JobRuns, jobDef, resolveJobInput, type Jobs } from "./jobs.js";
 import { searchHistory } from "./history.js";
+import { answerText, clip as clipText, Delegations, nameFromTask, workerInstructions, workerRemoval, type Delegation, type DelegationEngine } from "./delegations.js";
+import { DEFAULT_SUBAGENT_MODEL, subagentModelId } from "./runner.js";
+
+export { DEFAULT_SUBAGENT_MODEL, subagentModelId };
 
 export const Workspace = defineDoc<AppState>({
   kind: "demo.workspace",
@@ -129,11 +133,6 @@ export type SpawnSession = (input: {
   prompt?: string;
 }) => Promise<{ session: SessionSummary; submissionId?: number }>;
 
-/** The model subagent and start_session use when the call names none: DPI_SUBAGENT_MODEL, read at each call, or the
- * newest Haiku. */
-export const DEFAULT_SUBAGENT_MODEL = "claude-haiku-latest";
-export const subagentModelId = () => process.env.DPI_SUBAGENT_MODEL?.trim() || DEFAULT_SUBAGENT_MODEL;
-
 const MODEL_CHOICE =
   "Model id from this device's model list, or an alias: claude-haiku-latest, claude-sonnet-latest (when the task needs more reasoning), claude-opus-latest.";
 
@@ -144,6 +143,8 @@ export function createPlayground(
   jobs: Jobs,
   /** A device model id or alias as a model ref; throws on an unknown id. */
   resolveModel: (id: string) => { provider: string; modelId: string },
+  /** Where delegated work runs and what is recorded about it (delegations.ts). */
+  delegations: DelegationEngine,
 ) {
   const readAppState = defineTool({
     name: "read_state",
@@ -435,52 +436,120 @@ export function createPlayground(
       };
     },
   });
+  /** One delegation as Bags reads it: the same shape whatever backend ran it. */
+  const report = (d: Delegation) => ({
+    id: d.id,
+    source: d.source,
+    label: d.label,
+    backend: d.backend,
+    ...(d.backendReason ? { backendReason: d.backendReason } : {}),
+    status: d.status,
+    model: d.model,
+    ...(d.url ? { url: d.url } : {}),
+    ...(d.sessionId ? { sessionId: d.sessionId } : {}),
+    ...(d.conversationId !== undefined ? { agent: d.conversationId } : {}),
+    ...(d.todo ? { todo: d.todo } : {}),
+    ...(d.result ? { result: clipText(d.result, 600) } : {}),
+    ...(d.reason ? { reason: d.reason } : {}),
+    ...(d.escalatedFrom ? { escalatedFrom: d.escalatedFrom } : {}),
+    ...(d.escalatedTo ? { escalatedTo: d.escalatedTo } : {}),
+  });
+  const link = (d: Delegation) => d.url ?? (d.conversationId !== undefined ? `agent #${d.conversationId}` : d.sessionId ?? `delegation #${d.id}`);
+
   const subagent = defineTool({
     name: "subagent",
     description:
-      "Delegate a self-contained task to an owned child conversation. Parent interruption also interrupts the child. The child runs on Haiku by default (claude-haiku-latest); pass model: claude-sonnet-latest when the task needs more reasoning. An unknown model fails the call.",
+      "Delegate a self-contained task to a child agent with code and read tools only. Where it runs is decided by this device, not by you: work in a clean, pushed git checkout runs in a Claude cloud session and returns at once with the session link; anything else runs here and returns the child's final answer with a link to the child. The child runs on Haiku by default (claude-haiku-latest); pass model: claude-sonnet-latest when the task needs more reasoning. An unknown model fails the call. Use the delegation tool to escalate, steer or stop it.",
     parameters: Type.Object({
       task: Type.String(),
       model: Type.Optional(Type.String({ description: `${MODEL_CHOICE} Default: claude-haiku-latest.` })),
+      cwd: Type.Optional(
+        Type.String({ description: "Existing folder for the child. Relative paths resolve against your working directory. Default: yours." }),
+      ),
     }),
     replay: "safe",
     execute: async (args, api, ctx) => {
-      // Resolved before anything is created, so an unknown id fails the call instead of falling back to another model.
-      const model = resolveModel(args.model?.trim() || subagentModelId());
-      const id = await api.commit(async (tx) => {
+      // Planned before anything is created, so an unknown model fails the call instead of falling back to another one.
+      const p = await delegations.plan(api, ctx, {
+        source: "subagent",
+        label: nameFromTask(args.task) || "Subagent",
+        instruction: args.task,
+        model: args.model?.trim() || subagentModelId(),
+        cwd: args.cwd?.trim() || undefined,
+        key: `subagent:${api.taskId}`,
+      });
+      if (p.backend === "cloud") {
+        const d = await delegations.dispatchFromTool(api, ctx, p);
+        await api.details({ delegationId: d.id, ...(d.sessionId ? { sessionId: d.sessionId } : {}) }, ctx);
+        return {
+          output: [
+            {
+              type: "text",
+              text: d.status === "blocked" ? `Cloud dispatch failed: ${d.reason}` : `Started in the cloud: ${link(d)} (delegation #${d.id}, ${d.model}). It runs on its own; steer or stop it with the delegation tool.`,
+            },
+          ],
+          isError: d.status === "blocked",
+          details: { delegationId: d.id } as JsonValue,
+        };
+      }
+      const agent = await api.agent(ctx);
+      const now = Date.now();
+      const { id, delegationId } = await api.commit(async (tx) => {
         const found = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
-        if (found) return found.id;
+        const d = await delegations.record(tx, api.conversationId, p, now);
+        if (found) return { id: found.id as number, delegationId: d.id };
         const child = await tx.createConversation({
           ownership: { kind: "task", taskId: api.taskId },
         });
-        await configure(tx, child.id, { tools: { remove: [subagent] }, model });
-        return child.id;
+        await configure(tx, child.id, {
+          tools: { remove: workerRemoval(agent) },
+          model: p.modelRef,
+          instructions: workerInstructions(p.code),
+          ...(p.cwd ? { cwd: p.cwd } : {}),
+        });
+        await delegations.change(tx, api.conversationId, d.id, (x) => void (x.conversationId = child.id as number));
+        return { id: child.id as number, delegationId: d.id };
       }, ctx);
-      await api.details({ conversationId: id }, ctx);
-      const child = await api.conversation(id, ctx);
-      if (!child) throw Error("Child missing");
-      const result = await (
-        await child.submit(
-          { type: "input", content: args.task, requestId: `child:${api.taskId}` },
-          ctx,
-        )
-      ).wait(ctx);
-      const answer =
-        result.status === "done" && result.type === "input"
-          ? await api.commit((tx) => tx.entry(AssistantEntry, result.answer), ctx)
-          : undefined;
-      return {
-        output: [
-          { type: "text", text: answer ? JSON.stringify(answer.model) : JSON.stringify(result) },
-        ],
-        details: { conversationId: id },
-      };
+      delegations.nameAgent?.(id, p.label);
+      await api.details({ conversationId: id, delegationId }, ctx);
+      const finish = (outcome: Parameters<DelegationEngine["settle"]>[3]) =>
+        api.commit((tx) => delegations.settle(tx, api.conversationId, delegationId, outcome, Date.now()), ctx);
+      try {
+        const child = await api.conversation(id as ConversationId, ctx);
+        if (!child) throw Error("Child missing");
+        const result = await (
+          await child.submit(
+            { type: "input", content: args.task, requestId: `child:${api.taskId}` },
+            ctx,
+          )
+        ).wait(ctx);
+        const answer =
+          result.status === "done" && result.type === "input"
+            ? await api.commit((tx) => tx.entry(AssistantEntry, result.answer), ctx)
+            : undefined;
+        // Only the child's final answer comes back, not its thinking or tool calls.
+        const text = answer ? answerText(answer.model) : "";
+        await finish(text ? { status: "done", result: text } : { status: "blocked", reason: `no answer (${result.status})` });
+        return {
+          output: [
+            {
+              type: "text",
+              text: text ? `${text}\n\nChild: agent #${id}` : `Child agent #${id} gave no answer (${result.status}).`,
+            },
+          ],
+          ...(text ? {} : { isError: true }),
+          details: { conversationId: id, delegationId },
+        };
+      } catch (e) {
+        await finish({ status: "stopped", reason: (e as Error).message }).catch(() => {});
+        throw e;
+      }
     },
   });
   const startSession = defineTool({
     name: "start_session",
     description:
-      "Start a new session on this device: its own harness, database and working directory, independent of this one. It keeps running if you are interrupted. Returns immediately; you do not wait for it. It runs on Haiku by default (claude-haiku-latest); pass model: claude-sonnet-latest when the work needs more reasoning. An unknown model fails the call.",
+      "Start a new session: its own harness and working directory, independent of this one. It keeps running if you are interrupted. Returns immediately; you do not wait for it. Where it runs is decided by this device: a session with a prompt on a clean, pushed git checkout runs in a Claude cloud session and returns its link; anything else is a session on this device. It runs on Haiku by default (claude-haiku-latest); pass model: claude-sonnet-latest when the work needs more reasoning. An unknown model fails the call.",
     parameters: Type.Object({
       name: Type.String({ description: "Session name shown in the network tree." }),
       cwd: Type.String({
@@ -495,16 +564,38 @@ export function createPlayground(
     }),
     replay: "safe",
     execute: async (args, api, ctx) => {
+      const prompt = args.prompt?.trim() || undefined;
+      const p = await delegations.plan(api, ctx, {
+        source: "start_session",
+        label: args.name,
+        instruction: prompt ?? "",
+        model: args.model?.trim() || subagentModelId(),
+        cwd: args.cwd,
+        key: `start_session:${sessionId}:${api.taskId}`,
+      });
+      // An idle session has nothing to run in the cloud.
+      if (p.backend === "cloud" && prompt) {
+        const d = await delegations.dispatchFromTool(api, ctx, p);
+        return {
+          output: [
+            {
+              type: "text",
+              text: d.status === "blocked" ? `Cloud dispatch failed: ${d.reason}` : `Started cloud session "${args.name}" (${link(d)}, ${d.model}, delegation #${d.id}). It runs on its own.`,
+            },
+          ],
+          isError: d.status === "blocked",
+          details: { delegationId: d.id, ...(d.sessionId ? { sessionId: d.sessionId } : {}) },
+        };
+      }
       const parent = await api.agent(ctx);
-      const cwd = args.cwd.startsWith("~") || isAbsolute(args.cwd) ? args.cwd : resolve(parent.cwd ?? ".", args.cwd);
       const thinking = THINKING_LEVELS.find((level) => level === parent.thinkingLevel);
       const { session, submissionId } = await spawn({
-        key: `start_session:${sessionId}:${api.taskId}`,
+        key: p.key!,
         name: args.name,
-        cwd,
-        model: resolveModel(args.model?.trim() || subagentModelId()),
+        cwd: p.cwd ?? parent.cwd ?? ".",
+        model: p.modelRef,
         thinkingLevel: thinking,
-        prompt: args.prompt?.trim() || undefined,
+        prompt,
       });
       const sent =
         submissionId === undefined
@@ -521,6 +612,38 @@ export function createPlayground(
       };
     },
   });
+  const delegation = defineTool({
+    name: "delegation",
+    description:
+      'Support operations for work handed to other agents (subagent, start_session, trigger todos). Where the work runs is not yours to decide; this is how you steer it. list shows every delegation: backend, status, link, result or reason. escalate reruns the same instruction on a stronger model (haiku, then sonnet, then opus; or model) with the failure or partial result carried into it; a running one is stopped first, and a trigger todo follows the new run. steer injects guidance into a running agent (message). stop ends a running agent. Name the delegation by id, or by task, the text of its trigger todo. Example: {"op":"escalate","task":"Fix the failing test"}.',
+    parameters: Type.Object({
+      op: Type.Union(["list", "escalate", "steer", "stop"].map((o) => Type.Literal(o))),
+      id: Type.Optional(Type.Integer({ minimum: 1, description: "The delegation's id." })),
+      task: Type.Optional(Type.String({ description: "A trigger todo's exact text, instead of id." })),
+      message: Type.Optional(Type.String({ description: "steer: the guidance to inject." })),
+      model: Type.Optional(Type.String({ description: "escalate: a specific stronger model. Default: the next one up." })),
+    }),
+    // No replay policy: a crash mid-call returns an interrupted result, so a steer is never sent twice.
+    execute: async (args, api, ctx) => {
+      const say = (value: unknown) => ({ output: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }] });
+      if (args.op === "list") {
+        const items = Object.values((await api.snapshot(Delegations, api.conversationId, ctx))?.items ?? {}).sort((a, b) => b.id - a.id);
+        return say(items.slice(0, 20).map(report));
+      }
+      const d = await delegations.find(api, ctx, { id: args.id, task: args.task });
+      if (args.op === "steer") {
+        if (!args.message?.trim()) throw Error("steer needs message: the guidance to inject");
+        await delegations.steer(api, ctx, d, args.message.trim());
+        return say(`Sent to delegation #${d.id} (${d.backend}, ${link(d)}).`);
+      }
+      if (args.op === "stop") {
+        await delegations.stop(api, ctx, d);
+        return say(`Stopped delegation #${d.id} (${d.backend}, ${link(d)}).`);
+      }
+      const next = await delegations.escalate(api, ctx, d, args.model);
+      return say({ escalated: report(next), from: d.id });
+    },
+  });
   const handoff = defineTool({
     name: "handoff",
     description:
@@ -533,7 +656,7 @@ export function createPlayground(
   });
   return defineExtension({
     name: "playground",
-    tasks: jobs.tasks,
+    tasks: [...jobs.tasks, ...delegations.tasks],
     tools: [
       readAppState,
       updateState,
@@ -544,13 +667,14 @@ export function createPlayground(
       pingOnCall,
       subagent,
       startSession,
+      delegation,
       handoff,
     ],
     sections: [
       section(
         "playground",
         () =>
-          `You are a concise coding agent in the Durable Pi playground. Explain only what matters. Use only the tools you are offered; read only agents get no tools that write. Use read_state to inspect App State and update_state to create, update, delete, or increment any field. App State is shared across all agents, sessions, conversations and forks in this demo. It survives browser closure, interrupted agents, and backend restarts. Forks use the current shared object rather than a historical copy. Read before writing because other agents and humans can change it. Use only read_state and update_state for this object, never inspect or edit its database files. App State is a flexible JSON object: numbers, booleans, strings, arrays, nested objects, and null all render as live controls in the UI. Read before editing. Use list_durable_jobs and run_durable_job to run a repeatable durable job (a named workflow with checkpointed phases) when asked; pass only the inputs list_durable_jobs documents. Runs continue in the background: check them with check_durable_job, and wait only when asked. Use search_history to look back at earlier messages, tool calls or entries by number, including what came before a reset, handoff or compaction. Use ping_on_call_engineer only when asked to page someone; it works once. Use subagent only when explicitly asked to delegate. Use start_session only when asked to start a new session; it runs on its own. Never claim an action happened without using its tool. Background runs finish independently; do not wait in bash. A browser disconnect does not stop your work.`,
+          `You are a concise coding agent in the Durable Pi playground. Explain only what matters. Use only the tools you are offered; read only agents get no tools that write. Use read_state to inspect App State and update_state to create, update, delete, or increment any field. App State is shared across all agents, sessions, conversations and forks in this demo. It survives browser closure, interrupted agents, and backend restarts. Forks use the current shared object rather than a historical copy. Read before writing because other agents and humans can change it. Use only read_state and update_state for this object, never inspect or edit its database files. App State is a flexible JSON object: numbers, booleans, strings, arrays, nested objects, and null all render as live controls in the UI. Read before editing. Use list_durable_jobs and run_durable_job to run a repeatable durable job (a named workflow with checkpointed phases) when asked; pass only the inputs list_durable_jobs documents. Runs continue in the background: check them with check_durable_job, and wait only when asked. Use search_history to look back at earlier messages, tool calls or entries by number, including what came before a reset, handoff or compaction. Use ping_on_call_engineer only when asked to page someone; it works once. Use subagent only when explicitly asked to delegate. Use start_session only when asked to start a new session; it runs on its own. Use delegation to escalate, steer or stop work you handed to an agent. Never claim an action happened without using its tool. Background runs finish independently; do not wait in bash. A browser disconnect does not stop your work.`,
         { tag: false },
       ),
     ],
