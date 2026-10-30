@@ -34,7 +34,8 @@ PREAMBLE = (
 
 
 def charter():
-    return (ORACLE / "charter.md").read_text()
+    # Frozen copy of the charter used in round 1, so later edits to the live charter don't shift the exam baseline.
+    return (HERE / "charter-r1.md").read_text()
 
 
 def playbook():
@@ -43,10 +44,23 @@ def playbook():
 
 # name -> (instructions factory, {extension: enabled})
 CONDITIONS = {
-    "baseline": (charter, {"memory": False, "library": False}),
-    "playbook": (playbook, {"memory": False, "library": False}),
-    "library": (playbook, {"memory": False, "library": True}),
+    "baseline": (charter, {"memory": False, "library": False, "expertise": False}),
+    "playbook": (playbook, {"memory": False, "library": False, "expertise": False}),
+    "library": (playbook, {"memory": False, "library": True, "expertise": False}),
+    # T13 agent expert: the charter plus only what Bags wrote himself (the `exam` expertise document, built by `learn`).
+    "self": (charter, {"memory": False, "library": False, "expertise": True}),
 }
+
+EXPERTISE = f"/v1/expertise/{SESSION}"
+
+REFLECT = (
+    "You just did a tabletop exercise and it was graded. Rewrite your expertise document: the general lessons you "
+    "will apply to DIFFERENT future tasks, not this one.\n"
+    "Rules: keep lessons general (no answers, names or facts specific to this exercise unless they state a general "
+    "rule). Keep what still holds, revise what proved wrong or incomplete, merge duplicates, drop weak lessons. One "
+    "or two sentences per lesson, imperative, with the reason. At most 6000 characters.\n"
+    "Output only the new document between <expertise> and </expertise>.\n\n"
+)
 
 
 def api(method, path, body=None, timeout=330):
@@ -257,6 +271,52 @@ def cmd_report(args):
             print(f"- {rate:.0%} {cid}: {cases[cid]['must_have'][i]}")
 
 
+def cmd_learn(args):
+    """T13 loop on the TRAIN cases only: answer, get graded, rewrite own expertise. Held-out cases are never shown."""
+    cases = load_cases("train")
+    tag = args.tag or f"learn-{time.strftime('%Y%m%d-%H%M')}"
+    out = OUT_ROOT / tag
+    out.mkdir(parents=True, exist_ok=True)
+    os.chmod(out, 0o700)
+    ensure_session()
+    instructions_fn, extensions = CONDITIONS["self"]
+    learner, grader = "exam-self-learn", "exam-grader-1"
+    ensure_agent(learner, instructions_fn(), extensions)
+    ensure_agent(grader, (HERE / "grader.md").read_text(), {"memory": False, "library": False, "expertise": False})
+    rubric = (HERE / "rubric.md").read_text()
+    if not args.keep:
+        api("DELETE", EXPERTISE, {"reason": f"start learn {tag}"})
+    for p in range(1, args.passes + 1):
+        for case in cases:
+            label = f"learn-p{p}-{case['id']}"
+            status, answer, secs, tools, reason = ask(learner, PREAMBLE + case["prompt"], label)
+            g = grade_one(grader, case, {"run": p, "answer": answer}, rubric) if answer else {"error": reason}
+            g["score"] = score(g, case)
+            doc = api("GET", EXPERTISE)
+            feedback = {
+                "exercise": case["prompt"], "your_answer": answer, "score": g["score"],
+                "dimensions": g.get("dimensions"),
+                "missed": [case["must_have"][m["i"]] for m in g.get("must_have", []) if not m.get("hit")],
+                "red_flags": [case["red_flags"][f["i"]] for f in g.get("red_flags", []) if f.get("present")],
+                "biggest_gap": g.get("biggest_gap"), "current_expertise": doc["content"],
+            }
+            _, text, _, _, _ = ask(learner, REFLECT + json.dumps(feedback, indent=1), f"{label}-reflect")
+            new, revision = None, doc["revision"]
+            if text and "<expertise>" in text and "</expertise>" in text:
+                new = text.split("<expertise>", 1)[1].rsplit("</expertise>", 1)[0].strip()[:8000]
+                revision = api("PUT", EXPERTISE, {"content": new, "reason": f"{tag} {label} score {g['score']}",
+                                                  "expectedRevision": doc["revision"]})["revision"]
+            rec = {"pass": p, "case": case["id"], "status": status, "seconds": secs, "tools": tools, "answer": answer,
+                   "grade": g, "reflection_ok": new is not None, "revision": revision,
+                   "expertise_chars": len(new or doc["content"])}
+            (out / f"{label}.json").write_text(json.dumps(rec, indent=2))
+            print(json.dumps({k: rec[k] for k in ("pass", "case", "revision", "expertise_chars", "reflection_ok")}
+                             | {"score": g["score"]}), flush=True)
+    final = api("GET", EXPERTISE)
+    (out / "expertise-final.md").write_text(final["content"])
+    print(f"expertise revision {final['revision']}, {len(final['content'])} chars -> {out / 'expertise-final.md'}")
+
+
 def main():
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -271,8 +331,12 @@ def main():
     g.add_argument("--parallel", type=int, default=3)
     rep = sub.add_parser("report")
     rep.add_argument("dirs", nargs="+")
+    lr = sub.add_parser("learn")
+    lr.add_argument("--passes", type=int, default=2)
+    lr.add_argument("--tag")
+    lr.add_argument("--keep", action="store_true", help="continue from the current expertise instead of resetting it")
     args = p.parse_args()
-    {"run": cmd_run, "grade": cmd_grade, "report": cmd_report}[args.cmd](args)
+    {"run": cmd_run, "grade": cmd_grade, "report": cmd_report, "learn": cmd_learn}[args.cmd](args)
 
 
 if __name__ == "__main__":
